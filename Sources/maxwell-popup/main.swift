@@ -322,6 +322,7 @@ class HoverView: NSView {
     var aspectRatio: CGFloat = 1.0
     var bubbleWindows: [NSWindow] = []
     var onSettingsClick: (() -> Void)?
+    var onResize: (() -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -392,6 +393,7 @@ class HoverView: NSView {
         let newY = currentFrame.origin.y - (newHeight - currentFrame.height) / 2
         let newFrame = NSRect(x: newX, y: newY, width: newWidth, height: newHeight)
         window.setFrame(newFrame, display: true, animate: true)
+        onResize?()
     }
 
     func showBubbles(messages: [String]) {
@@ -940,6 +942,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         containerView.onSettingsClick = { [weak self] in
             self?.settingsController.show()
         }
+        containerView.onResize = { [weak self] in
+            self?.saveWindowFrame()
+        }
 
         let imageView = DraggableImageView(frame: NSRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height))
         imageView.imageScaling = .scaleProportionallyUpOrDown
@@ -949,6 +954,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         imageView.onDrag = { [weak self] newY in
             self?.originalY = newY
             self?.containerView.updateBubblePositions()
+            self?.saveWindowFrame()
         }
         imageView.onClick = { [weak self] in
             self?.doClickJump()
@@ -957,7 +963,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         containerView.addSubview(imageView, positioned: .below, relativeTo: containerView.closeButton)
         window.contentView = containerView
-        window.center()
+        restoreWindowFrame()
         window.makeKeyAndOrderFront(nil)
 
         claudeMonitor = ClaudeMonitor()
@@ -1055,6 +1061,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.window.setFrameOrigin(NSPoint(x: self.window.frame.origin.x, y: startY))
             }
         }
+    }
+
+    private func saveWindowFrame() {
+        let frame = window.frame
+        UserDefaults.standard.set(frame.origin.x, forKey: "maxwell_x")
+        UserDefaults.standard.set(frame.origin.y, forKey: "maxwell_y")
+        UserDefaults.standard.set(frame.width, forKey: "maxwell_width")
+        UserDefaults.standard.set(frame.height, forKey: "maxwell_height")
+        UserDefaults.standard.synchronize()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        saveWindowFrame()
+    }
+
+    private func restoreWindowFrame() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "maxwell_x") != nil {
+            let x = defaults.double(forKey: "maxwell_x")
+            let y = defaults.double(forKey: "maxwell_y")
+            let width = defaults.double(forKey: "maxwell_width")
+            let height = defaults.double(forKey: "maxwell_height")
+            if width > 0 && height > 0 {
+                window.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
+                return
+            }
+        }
+        window.center()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
