@@ -60,13 +60,221 @@ class SpeechBubble: NSView {
     }
 }
 
+struct RemoteConfig: Codable {
+    var name: String
+    var host: String
+    var user: String
+    var keyPath: String
+    var enabled: Bool
+}
+
+struct MaxwellConfig: Codable {
+    var remotes: [RemoteConfig]
+
+    static let configPath = NSString(string: "~/.maxwell/config.json").expandingTildeInPath
+
+    static func load() -> MaxwellConfig {
+        guard let data = FileManager.default.contents(atPath: configPath),
+              let config = try? JSONDecoder().decode(MaxwellConfig.self, from: data) else {
+            return MaxwellConfig(remotes: [])
+        }
+        return config
+    }
+
+    func save() {
+        let dir = NSString(string: "~/.maxwell").expandingTildeInPath
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(self) {
+            try? data.write(to: URL(fileURLWithPath: MaxwellConfig.configPath))
+        }
+    }
+}
+
+class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+    var window: NSWindow?
+    var tableView: NSTableView!
+    var config: MaxwellConfig
+    var onConfigChanged: (() -> Void)?
+
+    override init() {
+        config = MaxwellConfig.load()
+        super.init()
+    }
+
+    func show() {
+        if window == nil {
+            setupWindow()
+        }
+        config = MaxwellConfig.load()
+        tableView.reloadData()
+        window?.center()
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func setupWindow() {
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 350),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        w.title = "Maxwell Settings"
+        w.isReleasedWhenClosed = false
+
+        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 350))
+
+        let label = NSTextField(labelWithString: "Remote SSH Servers")
+        label.font = NSFont.boldSystemFont(ofSize: 14)
+        label.frame = NSRect(x: 20, y: 310, width: 200, height: 20)
+        contentView.addSubview(label)
+
+        let scrollView = NSScrollView(frame: NSRect(x: 20, y: 100, width: 460, height: 200))
+        tableView = NSTableView(frame: scrollView.bounds)
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.rowHeight = 24
+
+        let nameCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
+        nameCol.title = "Name"
+        nameCol.width = 80
+        tableView.addTableColumn(nameCol)
+
+        let hostCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("host"))
+        hostCol.title = "Host"
+        hostCol.width = 120
+        tableView.addTableColumn(hostCol)
+
+        let userCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("user"))
+        userCol.title = "User"
+        userCol.width = 80
+        tableView.addTableColumn(userCol)
+
+        let keyCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("keyPath"))
+        keyCol.title = "SSH Key Path"
+        keyCol.width = 140
+        tableView.addTableColumn(keyCol)
+
+        let enabledCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("enabled"))
+        enabledCol.title = "On"
+        enabledCol.width = 30
+        tableView.addTableColumn(enabledCol)
+
+        scrollView.documentView = tableView
+        scrollView.hasVerticalScroller = true
+        contentView.addSubview(scrollView)
+
+        let addButton = NSButton(frame: NSRect(x: 20, y: 60, width: 80, height: 30))
+        addButton.title = "Add"
+        addButton.bezelStyle = .rounded
+        addButton.target = self
+        addButton.action = #selector(addRemote)
+        contentView.addSubview(addButton)
+
+        let removeButton = NSButton(frame: NSRect(x: 110, y: 60, width: 80, height: 30))
+        removeButton.title = "Remove"
+        removeButton.bezelStyle = .rounded
+        removeButton.target = self
+        removeButton.action = #selector(removeRemote)
+        contentView.addSubview(removeButton)
+
+        let saveButton = NSButton(frame: NSRect(x: 380, y: 20, width: 100, height: 30))
+        saveButton.title = "Save"
+        saveButton.bezelStyle = .rounded
+        saveButton.target = self
+        saveButton.action = #selector(saveConfig)
+        contentView.addSubview(saveButton)
+
+        w.contentView = contentView
+        window = w
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        return config.remotes.count
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard row < config.remotes.count else { return nil }
+        let remote = config.remotes[row]
+        let identifier = tableColumn?.identifier.rawValue ?? ""
+
+        if identifier == "enabled" {
+            let checkbox = NSButton(checkboxWithTitle: "", target: self, action: #selector(toggleEnabled(_:)))
+            checkbox.state = remote.enabled ? .on : .off
+            checkbox.tag = row
+            return checkbox
+        }
+
+        let textField = NSTextField()
+        textField.isBordered = true
+        textField.bezelStyle = .squareBezel
+        textField.isEditable = true
+        textField.delegate = self
+        textField.tag = row
+
+        switch identifier {
+        case "name": textField.stringValue = remote.name
+        case "host": textField.stringValue = remote.host
+        case "user": textField.stringValue = remote.user
+        case "keyPath": textField.stringValue = remote.keyPath
+        default: break
+        }
+
+        textField.identifier = tableColumn?.identifier
+        return textField
+    }
+
+    @objc private func toggleEnabled(_ sender: NSButton) {
+        let row = sender.tag
+        if row < config.remotes.count {
+            config.remotes[row].enabled = sender.state == .on
+        }
+    }
+
+    @objc private func addRemote() {
+        config.remotes.append(RemoteConfig(name: "new", host: "", user: "", keyPath: "~/.ssh/id_rsa", enabled: true))
+        tableView.reloadData()
+    }
+
+    @objc private func removeRemote() {
+        let row = tableView.selectedRow
+        if row >= 0 && row < config.remotes.count {
+            config.remotes.remove(at: row)
+            tableView.reloadData()
+        }
+    }
+
+    @objc private func saveConfig() {
+        config.save()
+        onConfigChanged?()
+        window?.close()
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let textField = obj.object as? NSTextField,
+              let identifier = textField.identifier?.rawValue else { return }
+        let row = textField.tag
+        guard row < config.remotes.count else { return }
+
+        switch identifier {
+        case "name": config.remotes[row].name = textField.stringValue
+        case "host": config.remotes[row].host = textField.stringValue
+        case "user": config.remotes[row].user = textField.stringValue
+        case "keyPath": config.remotes[row].keyPath = textField.stringValue
+        default: break
+        }
+    }
+}
+
 class HoverView: NSView {
     var closeButton: NSButton!
     var increaseButton: NSButton!
     var decreaseButton: NSButton!
+    var settingsButton: NSButton!
     var trackingArea: NSTrackingArea?
     var aspectRatio: CGFloat = 1.0
     var bubbleWindows: [NSWindow] = []
+    var onSettingsClick: (() -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -109,6 +317,15 @@ class HoverView: NSView {
         decreaseButton.target = self
         decreaseButton.action = #selector(decreaseSize)
         addSubview(decreaseButton)
+
+        settingsButton = createButton(symbolName: "gearshape.fill", x: frame.width - 96)
+        settingsButton.target = self
+        settingsButton.action = #selector(openSettings)
+        addSubview(settingsButton)
+    }
+
+    @objc private func openSettings() {
+        onSettingsClick?()
     }
 
     @objc private func increaseSize() {
@@ -205,12 +422,14 @@ class HoverView: NSView {
         closeButton.isHidden = false
         increaseButton.isHidden = false
         decreaseButton.isHidden = false
+        settingsButton.isHidden = false
     }
 
     override func mouseExited(with event: NSEvent) {
         closeButton.isHidden = true
         increaseButton.isHidden = true
         decreaseButton.isHidden = true
+        settingsButton.isHidden = true
     }
 }
 
@@ -219,6 +438,7 @@ class ClaudeMonitor {
     var onClaudeNotWaiting: (() -> Void)?
     private var timer: Timer?
     private var lastState: Bool = false
+    private var config: MaxwellConfig = MaxwellConfig.load()
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -231,11 +451,17 @@ class ClaudeMonitor {
         timer = nil
     }
 
+    func reloadConfig() {
+        config = MaxwellConfig.load()
+    }
+
     private var lastMessages: [String] = []
 
     private func checkClaude() {
         DispatchQueue.global(qos: .background).async { [weak self] in
-            let messages = self?.checkAllSessions() ?? []
+            var messages = self?.checkAllSessions() ?? []
+            let remoteMessages = self?.checkRemoteSessions() ?? []
+            messages.append(contentsOf: remoteMessages)
             DispatchQueue.main.async {
                 if !messages.isEmpty {
                     if messages != self?.lastMessages {
@@ -252,6 +478,63 @@ class ClaudeMonitor {
                 self?.lastState = !messages.isEmpty
             }
         }
+    }
+
+    private func checkRemoteSessions() -> [String] {
+        var messages: [String] = []
+        let enabledRemotes = config.remotes.filter { $0.enabled }
+
+        for remote in enabledRemotes {
+            let keyPath = NSString(string: remote.keyPath).expandingTildeInPath
+            let sshCmd = "ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no -i \"\(keyPath)\" \(remote.user)@\(remote.host) 'cat /tmp/maxwell_claude/*.json 2>/dev/null'"
+
+            let task = Process()
+            task.launchPath = "/bin/bash"
+            task.arguments = ["-c", sshCmd]
+
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = FileHandle.nullDevice
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+
+                for line in output.components(separatedBy: .newlines) where !line.isEmpty {
+                    if let jsonData = line.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                       let tool = json["tool"] as? String,
+                       let cwd = json["cwd"] as? String,
+                       let time = json["time"] as? Int {
+                        let now = Int(Date().timeIntervalSince1970)
+                        if now - time > 2 && now - time < 120 {
+                            let cmd = json["cmd"] as? String ?? ""
+                            let folder = cwd.components(separatedBy: "/").suffix(2).joined(separator: "/")
+                            let toolIcon: String
+                            switch tool {
+                            case "Bash": toolIcon = "🖥️"
+                            case "Edit": toolIcon = "✏️"
+                            case "Write": toolIcon = "📝"
+                            case "Read": toolIcon = "📖"
+                            default: toolIcon = "⚠️"
+                            }
+                            let shortCmd = cmd.count > 20 ? String(cmd.prefix(20)) + "…" : cmd
+                            let serverLabel = "[\(remote.name)] "
+                            if !shortCmd.isEmpty {
+                                messages.append("\(serverLabel)\(toolIcon) \(shortCmd)\n📁 \(folder)")
+                            } else {
+                                messages.append("\(serverLabel)\(toolIcon) \(tool)\n📁 \(folder)")
+                            }
+                        }
+                    }
+                }
+            } catch {
+            }
+        }
+        return messages
     }
 
     private func checkAllSessions() -> [String] {
@@ -530,11 +813,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var containerView: HoverView!
     var claudeMonitor: ClaudeMonitor!
+    var settingsController: SettingsWindowController!
     var originalY: CGFloat = 0
     var jumpTimer: Timer?
     var hasBubbles: Bool = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        settingsController = SettingsWindowController()
+        settingsController.onConfigChanged = { [weak self] in
+            self?.claudeMonitor.reloadConfig()
+        }
+
         guard let gifURL = Bundle.module.url(forResource: "Maxwell", withExtension: "gif"),
               let gifData = try? Data(contentsOf: gifURL),
               let image = NSImage(data: gifData) else {
@@ -561,6 +850,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         containerView = HoverView(frame: NSRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height))
         containerView.aspectRatio = imageSize.width / imageSize.height
+        containerView.onSettingsClick = { [weak self] in
+            self?.settingsController.show()
+        }
 
         let imageView = DraggableImageView(frame: NSRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height))
         imageView.imageScaling = .scaleProportionallyUpOrDown
