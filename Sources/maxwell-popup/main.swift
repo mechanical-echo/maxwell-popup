@@ -3,9 +3,12 @@ import AppKit
 class DraggableImageView: NSImageView {
     var initialMouseLocation: NSPoint = .zero
     var onDrag: ((CGFloat) -> Void)?
+    var onClick: (() -> Void)?
+    private var didDrag = false
 
     override func mouseDown(with event: NSEvent) {
         initialMouseLocation = event.locationInWindow
+        didDrag = false
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -13,6 +16,9 @@ class DraggableImageView: NSImageView {
         let currentLocation = event.locationInWindow
         let deltaX = currentLocation.x - initialMouseLocation.x
         let deltaY = currentLocation.y - initialMouseLocation.y
+        if abs(deltaX) > 3 || abs(deltaY) > 3 {
+            didDrag = true
+        }
         let newOrigin = NSPoint(
             x: window.frame.origin.x + deltaX,
             y: window.frame.origin.y + deltaY
@@ -20,43 +26,84 @@ class DraggableImageView: NSImageView {
         window.setFrameOrigin(newOrigin)
         onDrag?(newOrigin.y)
     }
+
+    override func mouseUp(with event: NSEvent) {
+        if !didDrag {
+            onClick?()
+        }
+    }
 }
 
 class SpeechBubble: NSView {
     var message: String = "" {
-        didSet { needsDisplay = true }
+        didSet { textLabel.stringValue = message }
+    }
+
+    private var visualEffectView: NSVisualEffectView?
+    private var textLabel: NSTextField!
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupView()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupView()
+    }
+
+    private func setupView() {
+        wantsLayer = true
+        layer?.masksToBounds = false
+
+        let bubbleRect = NSRect(x: 0, y: 12, width: bounds.width, height: bounds.height - 12)
+
+        let effect = NSVisualEffectView(frame: bubbleRect)
+        effect.material = .popover
+        effect.state = .active
+        effect.blendingMode = .behindWindow
+        effect.wantsLayer = true
+        effect.layer?.cornerRadius = 12
+        effect.layer?.borderWidth = 0.5
+        effect.layer?.borderColor = NSColor.gray.withAlphaComponent(0.3).cgColor
+        addSubview(effect)
+        visualEffectView = effect
+
+        textLabel = NSTextField(labelWithString: "")
+        textLabel.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        textLabel.textColor = NSColor.labelColor
+        textLabel.alignment = .center
+        textLabel.lineBreakMode = .byTruncatingTail
+        textLabel.maximumNumberOfLines = 2
+        textLabel.cell?.wraps = true
+        textLabel.cell?.truncatesLastVisibleLine = true
+        effect.addSubview(textLabel)
+    }
+
+    override func layout() {
+        super.layout()
+        let bubbleRect = NSRect(x: 0, y: 12, width: bounds.width, height: bounds.height - 12)
+        visualEffectView?.frame = bubbleRect
+        textLabel?.frame = NSRect(x: 8, y: 4, width: bubbleRect.width - 16, height: bubbleRect.height - 8)
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        let bubbleRect = NSRect(x: 0, y: 10, width: bounds.width, height: bounds.height - 10)
-        let path = NSBezierPath(roundedRect: bubbleRect, xRadius: 10, yRadius: 10)
-
         let tailPath = NSBezierPath()
-        tailPath.move(to: NSPoint(x: bounds.width / 2 - 8, y: 10))
-        tailPath.line(to: NSPoint(x: bounds.width / 2, y: 0))
-        tailPath.line(to: NSPoint(x: bounds.width / 2 + 8, y: 10))
+        let tailWidth: CGFloat = 12
+        let centerX = bounds.width / 2
+        tailPath.move(to: NSPoint(x: centerX - tailWidth / 2, y: 12))
+        tailPath.line(to: NSPoint(x: centerX, y: 4))
+        tailPath.line(to: NSPoint(x: centerX + tailWidth / 2, y: 12))
         tailPath.close()
 
-        NSColor.white.setFill()
-        path.fill()
+        NSColor.windowBackgroundColor.withAlphaComponent(0.9).setFill()
         tailPath.fill()
 
-        NSColor.gray.setStroke()
-        path.lineWidth = 1
-        path.stroke()
+        NSColor.gray.withAlphaComponent(0.3).setStroke()
+        tailPath.lineWidth = 0.5
         tailPath.stroke()
-
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.alignment = .center
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-            .foregroundColor: NSColor.black,
-            .paragraphStyle: paragraphStyle
-        ]
-        let textRect = bubbleRect.insetBy(dx: 8, dy: 6)
-        message.draw(in: textRect, withAttributes: attrs)
     }
 }
 
@@ -352,11 +399,23 @@ class HoverView: NSView {
 
         guard let mainWindow = self.window else { return }
 
-        let bubbleWidth: CGFloat = 180
+        let maxBubbleWidth = mainWindow.frame.width
+        let minBubbleWidth: CGFloat = 120
         let bubbleHeight: CGFloat = 55
         let spacing: CGFloat = 5
+        let padding: CGFloat = 24
 
         for (index, message) in messages.enumerated() {
+            let font = NSFont.systemFont(ofSize: 10, weight: .medium)
+            let lines = message.components(separatedBy: "\n")
+            var maxLineWidth: CGFloat = 0
+            for line in lines {
+                let attrs: [NSAttributedString.Key: Any] = [.font: font]
+                let size = (line as NSString).size(withAttributes: attrs)
+                maxLineWidth = max(maxLineWidth, size.width)
+            }
+            let bubbleWidth = min(max(maxLineWidth + padding, minBubbleWidth), maxBubbleWidth)
+
             let yOffset = CGFloat(index) * (bubbleHeight + spacing)
             let bubbleX = mainWindow.frame.midX - bubbleWidth / 2
             let bubbleY = mainWindow.frame.maxY + 5 + yOffset
@@ -392,16 +451,44 @@ class HoverView: NSView {
     func updateBubblePositions() {
         guard let mainWindow = self.window else { return }
 
-        let bubbleWidth: CGFloat = 180
         let bubbleHeight: CGFloat = 55
         let spacing: CGFloat = 5
 
         for (index, bubbleWindow) in bubbleWindows.enumerated() {
+            let bubbleWidth = bubbleWindow.frame.width
             let yOffset = CGFloat(index) * (bubbleHeight + spacing)
             let bubbleX = mainWindow.frame.midX - bubbleWidth / 2
             let bubbleY = mainWindow.frame.maxY + 5 + yOffset
             bubbleWindow.setFrameOrigin(NSPoint(x: bubbleX, y: bubbleY))
         }
+    }
+
+    func showMeow() {
+        let meowLabel = NSTextField(labelWithString: "meow")
+        meowLabel.font = NSFont.systemFont(ofSize: 14, weight: .bold)
+        meowLabel.textColor = NSColor.labelColor
+        meowLabel.backgroundColor = .clear
+        meowLabel.isBezeled = false
+        meowLabel.isEditable = false
+        meowLabel.sizeToFit()
+
+        let padding: CGFloat = 30
+        let maxX = bounds.width - meowLabel.frame.width - padding
+        let maxY = bounds.height - meowLabel.frame.height - padding
+        let randomX = CGFloat.random(in: padding...max(padding, maxX))
+        let randomY = CGFloat.random(in: padding...max(padding, maxY))
+        meowLabel.frame.origin = NSPoint(x: randomX, y: randomY)
+        meowLabel.alphaValue = 1.0
+        addSubview(meowLabel)
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 1.0
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            meowLabel.animator().frame.origin.y += 40
+            meowLabel.animator().alphaValue = 0
+        }, completionHandler: {
+            meowLabel.removeFromSuperview()
+        })
     }
 
     override func updateTrackingAreas() {
@@ -863,6 +950,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.originalY = newY
             self?.containerView.updateBubblePositions()
         }
+        imageView.onClick = { [weak self] in
+            self?.doClickJump()
+            self?.containerView.showMeow()
+        }
 
         containerView.addSubview(imageView, positioned: .below, relativeTo: containerView.closeButton)
         window.contentView = containerView
@@ -908,9 +999,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func doOneJump() {
         guard hasBubbles else { return }
 
-        let jumpHeight: CGFloat = 25
+        let jumpHeight: CGFloat = 35
         let steps = 20
-        let totalDuration = 0.3
+        let totalDuration = 0.4
         let stepDuration = totalDuration / Double(steps)
         var currentStep = 0
 
@@ -932,9 +1023,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 timer.invalidate()
                 self.window.setFrameOrigin(NSPoint(x: self.window.frame.origin.x, y: self.originalY))
                 self.containerView.updateBubblePositions()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.doOneJump()
-                }
+                self.doOneJump()
+            }
+        }
+    }
+
+    func doClickJump() {
+        guard !hasBubbles else { return }
+
+        let startY = window.frame.origin.y
+        let jumpHeight: CGFloat = 20
+        let steps = 16
+        let totalDuration = 0.25
+        let stepDuration = totalDuration / Double(steps)
+        var currentStep = 0
+
+        Timer.scheduledTimer(withTimeInterval: stepDuration, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+
+            currentStep += 1
+            let progress = Double(currentStep) / Double(steps)
+            let bounceProgress = sin(progress * .pi)
+            let newY = startY + jumpHeight * CGFloat(bounceProgress)
+            self.window.setFrameOrigin(NSPoint(x: self.window.frame.origin.x, y: newY))
+
+            if currentStep >= steps {
+                timer.invalidate()
+                self.window.setFrameOrigin(NSPoint(x: self.window.frame.origin.x, y: startY))
             }
         }
     }
