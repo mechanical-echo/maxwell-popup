@@ -321,8 +321,10 @@ class HoverView: NSView {
     var trackingArea: NSTrackingArea?
     var aspectRatio: CGFloat = 1.0
     var bubbleWindows: [NSWindow] = []
+    var finishedBubbleWindows: [NSWindow] = []
     var onSettingsClick: (() -> Void)?
     var onResize: (() -> Void)?
+    var onFinishedBubbleClick: (() -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -450,6 +452,62 @@ class HoverView: NSView {
         bubbleWindows.removeAll()
     }
 
+    func showFinishedBubbles(messages: [String]) {
+        hideFinishedBubbles()
+
+        guard let mainWindow = self.window else { return }
+
+        let maxBubbleWidth = mainWindow.frame.width
+        let minBubbleWidth: CGFloat = 120
+        let bubbleHeight: CGFloat = 55
+        let spacing: CGFloat = 5
+        let padding: CGFloat = 24
+
+        let baseYOffset = CGFloat(bubbleWindows.count) * (bubbleHeight + spacing)
+
+        for (index, message) in messages.enumerated() {
+            let font = NSFont.systemFont(ofSize: 10, weight: .medium)
+            let lines = message.components(separatedBy: "\n")
+            var maxLineWidth: CGFloat = 0
+            for line in lines {
+                let attrs: [NSAttributedString.Key: Any] = [.font: font]
+                let size = (line as NSString).size(withAttributes: attrs)
+                maxLineWidth = max(maxLineWidth, size.width)
+            }
+            let bubbleWidth = min(max(maxLineWidth + padding, minBubbleWidth), maxBubbleWidth)
+
+            let yOffset = baseYOffset + CGFloat(index) * (bubbleHeight + spacing)
+            let bubbleX = mainWindow.frame.midX - bubbleWidth / 2
+            let bubbleY = mainWindow.frame.maxY + 5 + yOffset
+
+            let bubbleWindow = NSWindow(
+                contentRect: NSRect(x: bubbleX, y: bubbleY, width: bubbleWidth, height: bubbleHeight),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            bubbleWindow.isOpaque = false
+            bubbleWindow.backgroundColor = .clear
+            bubbleWindow.hasShadow = false
+            bubbleWindow.level = .floating
+            bubbleWindow.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+
+            let bubble = SpeechBubble(frame: NSRect(x: 0, y: 0, width: bubbleWidth, height: bubbleHeight))
+            bubble.message = message
+            bubbleWindow.contentView = bubble
+            bubbleWindow.orderFront(nil)
+
+            finishedBubbleWindows.append(bubbleWindow)
+        }
+    }
+
+    func hideFinishedBubbles() {
+        for bubbleWindow in finishedBubbleWindows {
+            bubbleWindow.orderOut(nil)
+        }
+        finishedBubbleWindows.removeAll()
+    }
+
     func updateBubblePositions() {
         guard let mainWindow = self.window else { return }
 
@@ -459,6 +517,15 @@ class HoverView: NSView {
         for (index, bubbleWindow) in bubbleWindows.enumerated() {
             let bubbleWidth = bubbleWindow.frame.width
             let yOffset = CGFloat(index) * (bubbleHeight + spacing)
+            let bubbleX = mainWindow.frame.midX - bubbleWidth / 2
+            let bubbleY = mainWindow.frame.maxY + 5 + yOffset
+            bubbleWindow.setFrameOrigin(NSPoint(x: bubbleX, y: bubbleY))
+        }
+
+        let baseYOffset = CGFloat(bubbleWindows.count) * (bubbleHeight + spacing)
+        for (index, bubbleWindow) in finishedBubbleWindows.enumerated() {
+            let bubbleWidth = bubbleWindow.frame.width
+            let yOffset = baseYOffset + CGFloat(index) * (bubbleHeight + spacing)
             let bubbleX = mainWindow.frame.midX - bubbleWidth / 2
             let bubbleY = mainWindow.frame.maxY + 5 + yOffset
             bubbleWindow.setFrameOrigin(NSPoint(x: bubbleX, y: bubbleY))
@@ -525,9 +592,12 @@ class HoverView: NSView {
 class ClaudeMonitor {
     var onClaudeWaiting: (([String]) -> Void)?
     var onClaudeNotWaiting: (() -> Void)?
+    var onClaudeFinished: (([String]) -> Void)?
+    var onClaudeFinishedCleared: (() -> Void)?
     private var timer: Timer?
     private var lastState: Bool = false
     private var config: MaxwellConfig = MaxwellConfig.load()
+    private var dismissedSessions: Set<String> = []
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -544,13 +614,24 @@ class ClaudeMonitor {
         config = MaxwellConfig.load()
     }
 
+    func dismissFinishedSessions() {
+        dismissedSessions = dismissedSessions.union(lastFinishedSessions)
+        lastFinishedMessages = []
+        onClaudeFinishedCleared?()
+    }
+
     private var lastMessages: [String] = []
+    private var lastFinishedMessages: [String] = []
+    private var lastFinishedSessions: Set<String> = []
 
     private func checkClaude() {
         DispatchQueue.global(qos: .background).async { [weak self] in
             var messages = self?.checkAllSessions() ?? []
             let remoteMessages = self?.checkRemoteSessions() ?? []
             messages.append(contentsOf: remoteMessages)
+
+            let (finishedMessages, finishedSessions) = self?.checkFinishedSessions() ?? ([], [])
+
             DispatchQueue.main.async {
                 if !messages.isEmpty {
                     if messages != self?.lastMessages {
@@ -565,6 +646,19 @@ class ClaudeMonitor {
                     }
                 }
                 self?.lastState = !messages.isEmpty
+
+                if !finishedMessages.isEmpty {
+                    if finishedMessages != self?.lastFinishedMessages {
+                        self?.lastFinishedMessages = finishedMessages
+                        self?.lastFinishedSessions = finishedSessions
+                        self?.onClaudeFinished?(finishedMessages)
+                    }
+                } else if !(self?.lastFinishedMessages.isEmpty ?? true) {
+                    self?.lastFinishedMessages = []
+                    self?.lastFinishedSessions = []
+                    self?.dismissedSessions = []
+                    self?.onClaudeFinishedCleared?()
+                }
             }
         }
     }
@@ -695,6 +789,134 @@ class ClaudeMonitor {
         }
 
         return messages
+    }
+
+    private func cleanupStoppedMarkers() {
+        let stoppedDir = "/tmp/maxwell_claude_stopped"
+        let fileManager = FileManager.default
+        let now = Int(Date().timeIntervalSince1970)
+
+        guard let files = try? fileManager.contentsOfDirectory(atPath: stoppedDir) else {
+            return
+        }
+
+        for file in files where file.hasSuffix(".json") {
+            let filePath = "\(stoppedDir)/\(file)"
+            if let data = fileManager.contents(atPath: filePath),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let time = json["time"] as? Int {
+                if now - time > 300 {
+                    try? fileManager.removeItem(atPath: filePath)
+                }
+            }
+        }
+    }
+
+    private func checkFinishedSessions() -> ([String], Set<String>) {
+        var messages: [String] = []
+        var sessionIds: Set<String> = []
+        let fileManager = FileManager.default
+        let projectsPath = NSString(string: "~/.claude/projects").expandingTildeInPath
+        let statusDir = "/tmp/maxwell_claude"
+        let stoppedDir = "/tmp/maxwell_claude_stopped"
+
+        cleanupStoppedMarkers()
+
+        guard let projectDirs = try? fileManager.contentsOfDirectory(atPath: projectsPath) else {
+            return (messages, sessionIds)
+        }
+
+        let now = Date()
+        let maxAge: TimeInterval = 300
+
+        for projectDir in projectDirs {
+            let projectPath = "\(projectsPath)/\(projectDir)"
+            guard let files = try? fileManager.contentsOfDirectory(atPath: projectPath) else {
+                continue
+            }
+
+            for file in files where file.hasSuffix(".jsonl") {
+                let filePath = "\(projectPath)/\(file)"
+                let sessionId = String(file.dropLast(6))
+
+                if dismissedSessions.contains(sessionId) {
+                    continue
+                }
+
+                let wasStopped = fileManager.fileExists(atPath: "\(stoppedDir)/\(sessionId).json")
+                if wasStopped {
+                    continue
+                }
+
+                guard let attrs = try? fileManager.attributesOfItem(atPath: filePath),
+                      let mtime = attrs[.modificationDate] as? Date else {
+                    continue
+                }
+
+                let age = now.timeIntervalSince(mtime)
+                if age < 5 || age > maxAge {
+                    continue
+                }
+
+                let hasActiveStatus = fileManager.fileExists(atPath: "\(statusDir)/\(sessionId).json")
+                if hasActiveStatus {
+                    continue
+                }
+
+                guard let data = fileManager.contents(atPath: filePath),
+                      let content = String(data: data, encoding: .utf8) else {
+                    continue
+                }
+
+                let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
+
+                var lastRelevantType: String? = nil
+                var userMessageCount = 0
+                var assistantMessageCount = 0
+                var lastUserPrompt: String? = nil
+
+                for line in lines.reversed() {
+                    guard let lineData = line.data(using: .utf8),
+                          let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                          let msgType = json["type"] as? String else {
+                        continue
+                    }
+                    if msgType == "assistant" {
+                        assistantMessageCount += 1
+                        if lastRelevantType == nil {
+                            lastRelevantType = msgType
+                        }
+                    } else if msgType == "user" {
+                        userMessageCount += 1
+                        if lastRelevantType == nil {
+                            lastRelevantType = msgType
+                        }
+                        if lastUserPrompt == nil {
+                            if let message = json["message"] as? [String: Any],
+                               let content = message["content"] as? String {
+                                lastUserPrompt = content
+                            }
+                        }
+                    }
+                    if userMessageCount >= 2 && assistantMessageCount >= 2 && lastUserPrompt != nil {
+                        break
+                    }
+                }
+
+                if lastRelevantType == "assistant" && userMessageCount >= 1 && assistantMessageCount >= 1 {
+                    if !sessionIds.contains(sessionId) {
+                        let folderParts = projectDir.split(separator: "-").suffix(2)
+                        let folder = folderParts.joined(separator: "/")
+                        let prompt = lastUserPrompt ?? ""
+                        let shortPrompt = prompt.count > 30 ? String(prompt.prefix(30)) + "…" : prompt
+                        messages.append("✅ \(shortPrompt)\n📁 \(folder)")
+                        sessionIds.insert(sessionId)
+                    }
+                }
+            }
+        }
+
+        return (messages, sessionIds)
     }
 
     private func checkStatusFile() -> String? {
@@ -906,6 +1128,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var originalY: CGFloat = 0
     var jumpTimer: Timer?
     var hasBubbles: Bool = false
+    var hasFinishedBubbles: Bool = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         settingsController = SettingsWindowController()
@@ -957,8 +1180,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.saveWindowFrame()
         }
         imageView.onClick = { [weak self] in
-            self?.doClickJump()
-            self?.containerView.showMeow()
+            if self?.hasFinishedBubbles == true {
+                self?.dismissFinishedNotifications()
+            } else {
+                self?.doClickJump()
+                self?.containerView.showMeow()
+            }
         }
 
         containerView.addSubview(imageView, positioned: .below, relativeTo: containerView.closeButton)
@@ -973,6 +1200,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         claudeMonitor.onClaudeNotWaiting = { [weak self] in
             self?.hideNotifications()
         }
+        claudeMonitor.onClaudeFinished = { [weak self] messages in
+            self?.showFinishedNotifications(messages: messages)
+        }
+        claudeMonitor.onClaudeFinishedCleared = { [weak self] in
+            self?.hideFinishedNotifications()
+        }
         claudeMonitor.start()
     }
 
@@ -984,6 +1217,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func hideNotifications() {
         containerView.hideBubbles()
         stopJumping()
+    }
+
+    func showFinishedNotifications(messages: [String]) {
+        containerView.showFinishedBubbles(messages: messages)
+        hasFinishedBubbles = true
+    }
+
+    func hideFinishedNotifications() {
+        containerView.hideFinishedBubbles()
+        hasFinishedBubbles = false
+    }
+
+    func dismissFinishedNotifications() {
+        claudeMonitor.dismissFinishedSessions()
+        hideFinishedNotifications()
     }
 
     func startJumping() {
