@@ -34,6 +34,142 @@ class DraggableImageView: NSImageView {
     }
 }
 
+class AnimatedGIFView: NSView {
+    var initialMouseLocation: NSPoint = .zero
+    var onDrag: ((CGFloat) -> Void)?
+    var onClick: (() -> Void)?
+    private var didDrag = false
+
+    private var frames: [(image: CGImage, duration: Double)] = []
+    private var currentFrameIndex = 0
+    private var frameTimer: Timer?
+    private var imageLayer: CALayer!
+
+    var speed: Double = 1.0 {
+        didSet {
+            if speed != oldValue {
+                restartAnimation()
+            }
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupLayer()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupLayer()
+    }
+
+    private func setupLayer() {
+        wantsLayer = true
+        imageLayer = CALayer()
+        imageLayer.frame = bounds
+        imageLayer.contentsGravity = .resizeAspect
+        layer?.addSublayer(imageLayer)
+    }
+
+    override func layout() {
+        super.layout()
+        imageLayer?.frame = bounds
+    }
+
+    func loadGIF(from url: URL) {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return }
+        let count = CGImageSourceGetCount(source)
+        frames.removeAll()
+
+        for i in 0..<count {
+            guard let cgImage = CGImageSourceCreateImageAtIndex(source, i, nil) else { continue }
+            var frameDuration = 0.1
+
+            if let properties = CGImageSourceCopyPropertiesAtIndex(source, i, nil) as? [String: Any],
+               let gifProps = properties[kCGImagePropertyGIFDictionary as String] as? [String: Any] {
+                if let delay = gifProps[kCGImagePropertyGIFUnclampedDelayTime as String] as? Double, delay > 0 {
+                    frameDuration = delay
+                } else if let delay = gifProps[kCGImagePropertyGIFDelayTime as String] as? Double, delay > 0 {
+                    frameDuration = delay
+                }
+            }
+            frames.append((cgImage, frameDuration))
+        }
+
+        if !frames.isEmpty {
+            displayFrame(0)
+            startAnimation()
+        }
+    }
+
+    private func displayFrame(_ index: Int) {
+        guard index < frames.count else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.contents = frames[index].image
+        CATransaction.commit()
+    }
+
+    private func startAnimation() {
+        guard frames.count > 1 else { return }
+        scheduleNextFrame()
+    }
+
+    private func scheduleNextFrame() {
+        guard !frames.isEmpty else { return }
+        let duration = frames[currentFrameIndex].duration / speed
+        frameTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
+            self?.advanceFrame()
+        }
+    }
+
+    private func advanceFrame() {
+        currentFrameIndex = (currentFrameIndex + 1) % frames.count
+        displayFrame(currentFrameIndex)
+        scheduleNextFrame()
+    }
+
+    private func restartAnimation() {
+        frameTimer?.invalidate()
+        frameTimer = nil
+        if !frames.isEmpty {
+            scheduleNextFrame()
+        }
+    }
+
+    func stopAnimation() {
+        frameTimer?.invalidate()
+        frameTimer = nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        initialMouseLocation = event.locationInWindow
+        didDrag = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let window = self.window else { return }
+        let currentLocation = event.locationInWindow
+        let deltaX = currentLocation.x - initialMouseLocation.x
+        let deltaY = currentLocation.y - initialMouseLocation.y
+        if abs(deltaX) > 3 || abs(deltaY) > 3 {
+            didDrag = true
+        }
+        let newOrigin = NSPoint(
+            x: window.frame.origin.x + deltaX,
+            y: window.frame.origin.y + deltaY
+        )
+        window.setFrameOrigin(newOrigin)
+        onDrag?(newOrigin.y)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if !didDrag {
+            onClick?()
+        }
+    }
+}
+
 class SpeechBubble: NSView {
     var message: String = "" {
         didSet { textLabel.stringValue = message }
@@ -117,13 +253,19 @@ struct RemoteConfig: Codable {
 
 struct MaxwellConfig: Codable {
     var remotes: [RemoteConfig]
+    var gifSpeed: Double
 
     static let configPath = NSString(string: "~/.maxwell/config.json").expandingTildeInPath
+
+    init(remotes: [RemoteConfig] = [], gifSpeed: Double = 1.0) {
+        self.remotes = remotes
+        self.gifSpeed = gifSpeed
+    }
 
     static func load() -> MaxwellConfig {
         guard let data = FileManager.default.contents(atPath: configPath),
               let config = try? JSONDecoder().decode(MaxwellConfig.self, from: data) else {
-            return MaxwellConfig(remotes: [])
+            return MaxwellConfig()
         }
         return config
     }
@@ -142,6 +284,14 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     var tableView: NSTableView!
     var config: MaxwellConfig
     var onConfigChanged: (() -> Void)?
+    var speedSlider: NSSlider!
+    var speedLabel: NSTextField!
+
+    private var sidebarTableView: NSTableView!
+    private var contentContainerView: NSView!
+    private var sshContentView: NSView!
+    private var othersContentView: NSView!
+    private let menuItems = ["SSH", "Others"]
 
     override init() {
         config = MaxwellConfig.load()
@@ -154,6 +304,7 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
         config = MaxwellConfig.load()
         tableView.reloadData()
+        updateSpeedUI()
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -161,7 +312,7 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
 
     private func setupWindow() {
         let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 350),
+            contentRect: NSRect(x: 0, y: 0, width: 550, height: 400),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -169,14 +320,64 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         w.title = "Maxwell Settings"
         w.isReleasedWhenClosed = false
 
-        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 350))
+        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 550, height: 400))
+
+        let sidebarWidth: CGFloat = 120
+        let sidebarView = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: sidebarWidth, height: 400))
+        sidebarView.material = .sidebar
+        sidebarView.blendingMode = .behindWindow
+        contentView.addSubview(sidebarView)
+
+        let sidebarScrollView = NSScrollView(frame: NSRect(x: 0, y: 50, width: sidebarWidth, height: 350))
+        sidebarScrollView.drawsBackground = false
+        sidebarTableView = NSTableView(frame: sidebarScrollView.bounds)
+        sidebarTableView.dataSource = self
+        sidebarTableView.delegate = self
+        sidebarTableView.rowHeight = 32
+        sidebarTableView.backgroundColor = .clear
+        sidebarTableView.headerView = nil
+        sidebarTableView.style = .sourceList
+
+        let sidebarCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("sidebar"))
+        sidebarCol.width = sidebarWidth - 4
+        sidebarTableView.addTableColumn(sidebarCol)
+
+        sidebarScrollView.documentView = sidebarTableView
+        sidebarScrollView.hasVerticalScroller = false
+        sidebarView.addSubview(sidebarScrollView)
+
+        contentContainerView = NSView(frame: NSRect(x: sidebarWidth, y: 0, width: 550 - sidebarWidth, height: 400))
+        contentView.addSubview(contentContainerView)
+
+        setupSSHContent()
+        setupOthersContent()
+
+        sshContentView.isHidden = false
+        othersContentView.isHidden = true
+
+        let saveButton = NSButton(frame: NSRect(x: 550 - 110, y: 10, width: 100, height: 30))
+        saveButton.title = "Save"
+        saveButton.bezelStyle = .rounded
+        saveButton.target = self
+        saveButton.action = #selector(saveConfig)
+        contentView.addSubview(saveButton)
+
+        w.contentView = contentView
+        window = w
+
+        sidebarTableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+    }
+
+    private func setupSSHContent() {
+        sshContentView = NSView(frame: contentContainerView.bounds)
+        contentContainerView.addSubview(sshContentView)
 
         let label = NSTextField(labelWithString: "Remote SSH Servers")
         label.font = NSFont.boldSystemFont(ofSize: 14)
-        label.frame = NSRect(x: 20, y: 310, width: 200, height: 20)
-        contentView.addSubview(label)
+        label.frame = NSRect(x: 20, y: 355, width: 200, height: 20)
+        sshContentView.addSubview(label)
 
-        let scrollView = NSScrollView(frame: NSRect(x: 20, y: 100, width: 460, height: 200))
+        let scrollView = NSScrollView(frame: NSRect(x: 20, y: 100, width: 390, height: 245))
         tableView = NSTableView(frame: scrollView.bounds)
         tableView.dataSource = self
         tableView.delegate = self
@@ -184,22 +385,22 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
 
         let nameCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
         nameCol.title = "Name"
-        nameCol.width = 80
+        nameCol.width = 70
         tableView.addTableColumn(nameCol)
 
         let hostCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("host"))
         hostCol.title = "Host"
-        hostCol.width = 120
+        hostCol.width = 100
         tableView.addTableColumn(hostCol)
 
         let userCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("user"))
         userCol.title = "User"
-        userCol.width = 80
+        userCol.width = 70
         tableView.addTableColumn(userCol)
 
         let keyCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("keyPath"))
         keyCol.title = "SSH Key Path"
-        keyCol.width = 140
+        keyCol.width = 110
         tableView.addTableColumn(keyCol)
 
         let enabledCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("enabled"))
@@ -209,38 +410,113 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
 
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
-        contentView.addSubview(scrollView)
+        sshContentView.addSubview(scrollView)
 
         let addButton = NSButton(frame: NSRect(x: 20, y: 60, width: 80, height: 30))
         addButton.title = "Add"
         addButton.bezelStyle = .rounded
         addButton.target = self
         addButton.action = #selector(addRemote)
-        contentView.addSubview(addButton)
+        sshContentView.addSubview(addButton)
 
         let removeButton = NSButton(frame: NSRect(x: 110, y: 60, width: 80, height: 30))
         removeButton.title = "Remove"
         removeButton.bezelStyle = .rounded
         removeButton.target = self
         removeButton.action = #selector(removeRemote)
-        contentView.addSubview(removeButton)
+        sshContentView.addSubview(removeButton)
+    }
 
-        let saveButton = NSButton(frame: NSRect(x: 380, y: 20, width: 100, height: 30))
-        saveButton.title = "Save"
-        saveButton.bezelStyle = .rounded
-        saveButton.target = self
-        saveButton.action = #selector(saveConfig)
-        contentView.addSubview(saveButton)
+    private func setupOthersContent() {
+        othersContentView = NSView(frame: contentContainerView.bounds)
+        contentContainerView.addSubview(othersContentView)
 
-        w.contentView = contentView
-        window = w
+        let label = NSTextField(labelWithString: "Animation")
+        label.font = NSFont.boldSystemFont(ofSize: 14)
+        label.frame = NSRect(x: 20, y: 355, width: 200, height: 20)
+        othersContentView.addSubview(label)
+
+        let speedTitleLabel = NSTextField(labelWithString: "GIF Speed:")
+        speedTitleLabel.font = NSFont.systemFont(ofSize: 13)
+        speedTitleLabel.frame = NSRect(x: 20, y: 310, width: 80, height: 20)
+        othersContentView.addSubview(speedTitleLabel)
+
+        speedSlider = NSSlider(frame: NSRect(x: 100, y: 310, width: 200, height: 20))
+        speedSlider.minValue = 0.25
+        speedSlider.maxValue = 3.0
+        speedSlider.doubleValue = config.gifSpeed
+        speedSlider.target = self
+        speedSlider.action = #selector(speedSliderChanged(_:))
+        othersContentView.addSubview(speedSlider)
+
+        speedLabel = NSTextField(labelWithString: formatSpeed(config.gifSpeed))
+        speedLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        speedLabel.frame = NSRect(x: 310, y: 310, width: 60, height: 20)
+        othersContentView.addSubview(speedLabel)
+
+        let slowLabel = NSTextField(labelWithString: "Slow")
+        slowLabel.font = NSFont.systemFont(ofSize: 10)
+        slowLabel.textColor = .secondaryLabelColor
+        slowLabel.frame = NSRect(x: 100, y: 290, width: 40, height: 14)
+        othersContentView.addSubview(slowLabel)
+
+        let fastLabel = NSTextField(labelWithString: "Fast")
+        fastLabel.font = NSFont.systemFont(ofSize: 10)
+        fastLabel.textColor = .secondaryLabelColor
+        fastLabel.frame = NSRect(x: 270, y: 290, width: 30, height: 14)
+        othersContentView.addSubview(fastLabel)
+
+        let resetButton = NSButton(frame: NSRect(x: 20, y: 250, width: 100, height: 24))
+        resetButton.title = "Reset to 1x"
+        resetButton.bezelStyle = .rounded
+        resetButton.target = self
+        resetButton.action = #selector(resetSpeed)
+        othersContentView.addSubview(resetButton)
+    }
+
+    private func formatSpeed(_ speed: Double) -> String {
+        return String(format: "%.2fx", speed)
+    }
+
+    private func updateSpeedUI() {
+        speedSlider?.doubleValue = config.gifSpeed
+        speedLabel?.stringValue = formatSpeed(config.gifSpeed)
+    }
+
+    @objc private func speedSliderChanged(_ sender: NSSlider) {
+        config.gifSpeed = sender.doubleValue
+        speedLabel.stringValue = formatSpeed(config.gifSpeed)
+    }
+
+    @objc private func resetSpeed() {
+        config.gifSpeed = 1.0
+        updateSpeedUI()
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
+        if tableView == sidebarTableView {
+            return menuItems.count
+        }
         return config.remotes.count
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        if tableView == sidebarTableView {
+            let cellId = NSUserInterfaceItemIdentifier("SidebarCell")
+            var cell = tableView.makeView(withIdentifier: cellId, owner: self) as? NSTableCellView
+            if cell == nil {
+                cell = NSTableCellView(frame: NSRect(x: 0, y: 0, width: 116, height: 32))
+                cell?.identifier = cellId
+                let textField = NSTextField(labelWithString: "")
+                textField.frame = NSRect(x: 8, y: 6, width: 100, height: 20)
+                textField.font = NSFont.systemFont(ofSize: 13)
+                cell?.addSubview(textField)
+                cell?.textField = textField
+            }
+            cell?.textField?.stringValue = menuItems[row]
+            return cell
+        }
+
         guard row < config.remotes.count else { return nil }
         let remote = config.remotes[row]
         let identifier = tableColumn?.identifier.rawValue ?? ""
@@ -269,6 +545,13 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
 
         textField.identifier = tableColumn?.identifier
         return textField
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard let tableView = notification.object as? NSTableView, tableView == sidebarTableView else { return }
+        let selectedRow = tableView.selectedRow
+        sshContentView.isHidden = selectedRow != 0
+        othersContentView.isHidden = selectedRow != 1
     }
 
     @objc private func toggleEnabled(_ sender: NSButton) {
@@ -1125,15 +1408,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var containerView: HoverView!
     var claudeMonitor: ClaudeMonitor!
     var settingsController: SettingsWindowController!
+    var gifView: AnimatedGIFView!
     var originalY: CGFloat = 0
     var jumpTimer: Timer?
     var hasBubbles: Bool = false
     var hasFinishedBubbles: Bool = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let config = MaxwellConfig.load()
+
         settingsController = SettingsWindowController()
         settingsController.onConfigChanged = { [weak self] in
             self?.claudeMonitor.reloadConfig()
+            self?.applyGifSpeed()
         }
 
         guard let gifURL = Bundle.module.url(forResource: "Maxwell", withExtension: "gif"),
@@ -1169,17 +1456,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.saveWindowFrame()
         }
 
-        let imageView = DraggableImageView(frame: NSRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height))
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.animates = true
-        imageView.image = image
-        imageView.autoresizingMask = [.width, .height]
-        imageView.onDrag = { [weak self] newY in
+        gifView = AnimatedGIFView(frame: NSRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height))
+        gifView.autoresizingMask = [.width, .height]
+        gifView.speed = config.gifSpeed
+        gifView.loadGIF(from: gifURL)
+        gifView.onDrag = { [weak self] newY in
             self?.originalY = newY
             self?.containerView.updateBubblePositions()
             self?.saveWindowFrame()
         }
-        imageView.onClick = { [weak self] in
+        gifView.onClick = { [weak self] in
             if self?.hasFinishedBubbles == true {
                 self?.dismissFinishedNotifications()
             } else {
@@ -1188,7 +1474,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        containerView.addSubview(imageView, positioned: .below, relativeTo: containerView.closeButton)
+        containerView.addSubview(gifView, positioned: .below, relativeTo: containerView.closeButton)
         window.contentView = containerView
         restoreWindowFrame()
         window.makeKeyAndOrderFront(nil)
@@ -1309,6 +1595,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.window.setFrameOrigin(NSPoint(x: self.window.frame.origin.x, y: startY))
             }
         }
+    }
+
+    private func applyGifSpeed() {
+        let config = MaxwellConfig.load()
+        gifView.speed = config.gifSpeed
     }
 
     private func saveWindowFrame() {
