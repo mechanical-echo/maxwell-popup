@@ -174,9 +174,15 @@ class SpeechBubble: NSView {
     var message: String = "" {
         didSet { textLabel.stringValue = message }
     }
+    var isClickable: Bool = false {
+        didSet { updateClickableAppearance() }
+    }
+    var onTap: (() -> Void)?
 
     private var visualEffectView: NSVisualEffectView?
     private var textLabel: NSTextField!
+    private var arrowLabel: NSTextField?
+    private var trackingArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -186,6 +192,10 @@ class SpeechBubble: NSView {
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         setupView()
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        return true
     }
 
     private func setupView() {
@@ -214,13 +224,66 @@ class SpeechBubble: NSView {
         textLabel.cell?.wraps = true
         textLabel.cell?.truncatesLastVisibleLine = true
         effect.addSubview(textLabel)
+
+        let arrow = NSTextField(labelWithString: "›")
+        arrow.font = NSFont.systemFont(ofSize: 16, weight: .medium)
+        arrow.textColor = NSColor.secondaryLabelColor
+        arrow.alignment = .center
+        arrow.isHidden = true
+        effect.addSubview(arrow)
+        arrowLabel = arrow
+    }
+
+    private func updateClickableAppearance() {
+        arrowLabel?.isHidden = !isClickable
+        if isClickable {
+            textLabel?.frame = NSRect(x: 8, y: 4, width: (visualEffectView?.bounds.width ?? bounds.width) - 28, height: (visualEffectView?.bounds.height ?? bounds.height - 12) - 8)
+        } else {
+            textLabel?.frame = NSRect(x: 8, y: 4, width: (visualEffectView?.bounds.width ?? bounds.width) - 16, height: (visualEffectView?.bounds.height ?? bounds.height - 12) - 8)
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea {
+            removeTrackingArea(existing)
+        }
+        trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea!)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        if isClickable {
+            NSCursor.pointingHand.set()
+            visualEffectView?.layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.5).cgColor
+            visualEffectView?.layer?.borderWidth = 1.0
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        NSCursor.arrow.set()
+        visualEffectView?.layer?.borderColor = NSColor.gray.withAlphaComponent(0.3).cgColor
+        visualEffectView?.layer?.borderWidth = 0.5
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if isClickable {
+            onTap?()
+        }
     }
 
     override func layout() {
         super.layout()
         let bubbleRect = NSRect(x: 0, y: 12, width: bounds.width, height: bounds.height - 12)
         visualEffectView?.frame = bubbleRect
-        textLabel?.frame = NSRect(x: 8, y: 4, width: bubbleRect.width - 16, height: bubbleRect.height - 8)
+        let textWidth = isClickable ? bubbleRect.width - 28 : bubbleRect.width - 16
+        textLabel?.frame = NSRect(x: 8, y: 4, width: textWidth, height: bubbleRect.height - 8)
+        arrowLabel?.frame = NSRect(x: bubbleRect.width - 20, y: 8, width: 16, height: bubbleRect.height - 16)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -251,15 +314,25 @@ struct RemoteConfig: Codable {
     var enabled: Bool
 }
 
+struct SessionInfo {
+    var message: String
+    var cwd: String
+    var sessionId: String
+    var isRemote: Bool
+    var remoteName: String?
+}
+
 struct MaxwellConfig: Codable {
     var remotes: [RemoteConfig]
     var gifSpeed: Double
+    var showDoneBubbles: Bool
 
     static let configPath = NSString(string: "~/.maxwell/config.json").expandingTildeInPath
 
-    init(remotes: [RemoteConfig] = [], gifSpeed: Double = 1.0) {
+    init(remotes: [RemoteConfig] = [], gifSpeed: Double = 1.0, showDoneBubbles: Bool = false) {
         self.remotes = remotes
         self.gifSpeed = gifSpeed
+        self.showDoneBubbles = showDoneBubbles
     }
 
     static func load() -> MaxwellConfig {
@@ -286,6 +359,7 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     var onConfigChanged: (() -> Void)?
     var speedSlider: NSSlider!
     var speedLabel: NSTextField!
+    var showDoneBubblesCheckbox: NSButton!
 
     private var sidebarTableView: NSTableView!
     private var contentContainerView: NSView!
@@ -305,6 +379,7 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         config = MaxwellConfig.load()
         tableView.reloadData()
         updateSpeedUI()
+        updateDoneBubblesUI()
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -425,6 +500,13 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         removeButton.target = self
         removeButton.action = #selector(removeRemote)
         sshContentView.addSubview(removeButton)
+
+        let testButton = NSButton(frame: NSRect(x: 200, y: 60, width: 80, height: 30))
+        testButton.title = "Test"
+        testButton.bezelStyle = .rounded
+        testButton.target = self
+        testButton.action = #selector(testSSH)
+        sshContentView.addSubview(testButton)
     }
 
     private func setupOthersContent() {
@@ -472,6 +554,16 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         resetButton.target = self
         resetButton.action = #selector(resetSpeed)
         othersContentView.addSubview(resetButton)
+
+        let notificationsLabel = NSTextField(labelWithString: "Notifications")
+        notificationsLabel.font = NSFont.boldSystemFont(ofSize: 14)
+        notificationsLabel.frame = NSRect(x: 20, y: 200, width: 200, height: 20)
+        othersContentView.addSubview(notificationsLabel)
+
+        showDoneBubblesCheckbox = NSButton(checkboxWithTitle: "Show done bubbles", target: self, action: #selector(doneBubblesChanged(_:)))
+        showDoneBubblesCheckbox.frame = NSRect(x: 20, y: 170, width: 200, height: 20)
+        showDoneBubblesCheckbox.state = config.showDoneBubbles ? .on : .off
+        othersContentView.addSubview(showDoneBubblesCheckbox)
     }
 
     private func formatSpeed(_ speed: Double) -> String {
@@ -491,6 +583,14 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     @objc private func resetSpeed() {
         config.gifSpeed = 1.0
         updateSpeedUI()
+    }
+
+    private func updateDoneBubblesUI() {
+        showDoneBubblesCheckbox?.state = config.showDoneBubbles ? .on : .off
+    }
+
+    @objc private func doneBubblesChanged(_ sender: NSButton) {
+        config.showDoneBubbles = sender.state == .on
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
@@ -574,6 +674,69 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
     }
 
+    @objc private func testSSH() {
+        let row = tableView.selectedRow
+        guard row >= 0 && row < config.remotes.count else {
+            showAlert(title: "No Selection", message: "Please select a remote to test.")
+            return
+        }
+
+        let remote = config.remotes[row]
+        let keyPath = NSString(string: remote.keyPath).expandingTildeInPath
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let task = Process()
+            task.launchPath = "/usr/bin/ssh"
+            task.arguments = [
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=5",
+                "-o", "StrictHostKeyChecking=no",
+                "-i", keyPath,
+                "\(remote.user)@\(remote.host)",
+                "echo ok"
+            ]
+
+            let pipe = Pipe()
+            let errorPipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = errorPipe
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+
+                let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                let errorOutput = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+
+                DispatchQueue.main.async {
+                    if task.terminationStatus == 0 && output.contains("ok") {
+                        self?.showAlert(title: "Success", message: "SSH connection to \(remote.name) works!")
+                    } else {
+                        let msg = errorOutput.isEmpty ? "Connection failed" : errorOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+                        self?.showAlert(title: "Failed", message: msg)
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self?.showAlert(title: "Error", message: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func showAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = title == "Success" ? .informational : .warning
+        alert.addButton(withTitle: "OK")
+        if let window = self.window {
+            alert.beginSheetModal(for: window, completionHandler: nil)
+        } else {
+            alert.runModal()
+        }
+    }
+
     @objc private func saveConfig() {
         config.save()
         onConfigChanged?()
@@ -605,9 +768,11 @@ class HoverView: NSView {
     var aspectRatio: CGFloat = 1.0
     var bubbleWindows: [NSWindow] = []
     var finishedBubbleWindows: [NSWindow] = []
+    var bubbleSessions: [SessionInfo] = []
     var onSettingsClick: (() -> Void)?
     var onResize: (() -> Void)?
     var onFinishedBubbleClick: (() -> Void)?
+    var onBubbleClick: ((SessionInfo) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -681,20 +846,21 @@ class HoverView: NSView {
         onResize?()
     }
 
-    func showBubbles(messages: [String]) {
+    func showBubbles(sessions: [SessionInfo]) {
         hideBubbles()
 
         guard let mainWindow = self.window else { return }
 
+        bubbleSessions = sessions
         let maxBubbleWidth = mainWindow.frame.width
         let minBubbleWidth: CGFloat = 120
         let bubbleHeight: CGFloat = 55
         let spacing: CGFloat = 5
         let padding: CGFloat = 24
 
-        for (index, message) in messages.enumerated() {
+        for (index, session) in sessions.enumerated() {
             let font = NSFont.systemFont(ofSize: 10, weight: .medium)
-            let lines = message.components(separatedBy: "\n")
+            let lines = session.message.components(separatedBy: "\n")
             var maxLineWidth: CGFloat = 0
             for line in lines {
                 let attrs: [NSAttributedString.Key: Any] = [.font: font]
@@ -720,7 +886,14 @@ class HoverView: NSView {
             bubbleWindow.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
 
             let bubble = SpeechBubble(frame: NSRect(x: 0, y: 0, width: bubbleWidth, height: bubbleHeight))
-            bubble.message = message
+            bubble.message = session.message
+            bubble.isClickable = !session.isRemote
+
+            let capturedSession = session
+            bubble.onTap = { [weak self] in
+                self?.onBubbleClick?(capturedSession)
+            }
+
             bubbleWindow.contentView = bubble
             bubbleWindow.orderFront(nil)
 
@@ -733,6 +906,7 @@ class HoverView: NSView {
             bubbleWindow.orderOut(nil)
         }
         bubbleWindows.removeAll()
+        bubbleSessions.removeAll()
     }
 
     func showFinishedBubbles(messages: [String]) {
@@ -873,7 +1047,7 @@ class HoverView: NSView {
 }
 
 class ClaudeMonitor {
-    var onClaudeWaiting: (([String]) -> Void)?
+    var onClaudeWaiting: (([SessionInfo]) -> Void)?
     var onClaudeNotWaiting: (() -> Void)?
     var onClaudeFinished: (([String]) -> Void)?
     var onClaudeFinishedCleared: (() -> Void)?
@@ -881,6 +1055,43 @@ class ClaudeMonitor {
     private var lastState: Bool = false
     private var config: MaxwellConfig = MaxwellConfig.load()
     private var dismissedSessions: Set<String> = []
+    private let dismissedSessionsKey = "dismissedClaudeSessions"
+
+    init() {
+        loadDismissedSessions()
+    }
+
+    private func loadDismissedSessions() {
+        if let saved = UserDefaults.standard.array(forKey: dismissedSessionsKey) as? [String] {
+            let projectsPath = NSString(string: "~/.claude/projects").expandingTildeInPath
+            let fileManager = FileManager.default
+            let now = Date()
+            let maxAge: TimeInterval = 300
+
+            let validSessions = saved.filter { sessionId in
+                guard let projectDirs = try? fileManager.contentsOfDirectory(atPath: projectsPath) else {
+                    return false
+                }
+                for projectDir in projectDirs {
+                    let filePath = "\(projectsPath)/\(projectDir)/\(sessionId).jsonl"
+                    if let attrs = try? fileManager.attributesOfItem(atPath: filePath),
+                       let mtime = attrs[.modificationDate] as? Date {
+                        let age = now.timeIntervalSince(mtime)
+                        return age <= maxAge
+                    }
+                }
+                return false
+            }
+            dismissedSessions = Set(validSessions)
+            if validSessions.count != saved.count {
+                saveDismissedSessions()
+            }
+        }
+    }
+
+    private func saveDismissedSessions() {
+        UserDefaults.standard.set(Array(dismissedSessions), forKey: dismissedSessionsKey)
+    }
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -899,27 +1110,30 @@ class ClaudeMonitor {
 
     func dismissFinishedSessions() {
         dismissedSessions = dismissedSessions.union(lastFinishedSessions)
+        saveDismissedSessions()
         lastFinishedMessages = []
         onClaudeFinishedCleared?()
     }
 
-    private var lastMessages: [String] = []
+    private var lastMessages: [SessionInfo] = []
     private var lastFinishedMessages: [String] = []
     private var lastFinishedSessions: Set<String> = []
 
     private func checkClaude() {
         DispatchQueue.global(qos: .background).async { [weak self] in
-            var messages = self?.checkAllSessions() ?? []
-            let remoteMessages = self?.checkRemoteSessions() ?? []
-            messages.append(contentsOf: remoteMessages)
+            var sessions = self?.checkAllSessions() ?? []
+            let remoteSessions = self?.checkRemoteSessions() ?? []
+            sessions.append(contentsOf: remoteSessions)
 
             let (finishedMessages, finishedSessions) = self?.checkFinishedSessions() ?? ([], [])
 
             DispatchQueue.main.async {
-                if !messages.isEmpty {
-                    if messages != self?.lastMessages {
-                        self?.lastMessages = messages
-                        self?.onClaudeWaiting?(messages)
+                if !sessions.isEmpty {
+                    let currentMessages = sessions.map { $0.message }
+                    let lastMessages = self?.lastMessages.map { $0.message } ?? []
+                    if currentMessages != lastMessages {
+                        self?.lastMessages = sessions
+                        self?.onClaudeWaiting?(sessions)
                     }
                 } else {
                     if self?.lastState != false {
@@ -928,7 +1142,7 @@ class ClaudeMonitor {
                         self?.onClaudeNotWaiting?()
                     }
                 }
-                self?.lastState = !messages.isEmpty
+                self?.lastState = !sessions.isEmpty
 
                 if !finishedMessages.isEmpty {
                     if finishedMessages != self?.lastFinishedMessages {
@@ -939,15 +1153,14 @@ class ClaudeMonitor {
                 } else if !(self?.lastFinishedMessages.isEmpty ?? true) {
                     self?.lastFinishedMessages = []
                     self?.lastFinishedSessions = []
-                    self?.dismissedSessions = []
                     self?.onClaudeFinishedCleared?()
                 }
             }
         }
     }
 
-    private func checkRemoteSessions() -> [String] {
-        var messages: [String] = []
+    private func checkRemoteSessions() -> [SessionInfo] {
+        var sessions: [SessionInfo] = []
         let enabledRemotes = config.remotes.filter { $0.enabled }
 
         for remote in enabledRemotes {
@@ -978,6 +1191,7 @@ class ClaudeMonitor {
                         let now = Int(Date().timeIntervalSince1970)
                         if now - time > 2 && now - time < 120 {
                             let cmd = json["cmd"] as? String ?? ""
+                            let sessionId = json["session"] as? String ?? ""
                             let folder = cwd.components(separatedBy: "/").suffix(2).joined(separator: "/")
                             let toolIcon: String
                             switch tool {
@@ -989,28 +1203,36 @@ class ClaudeMonitor {
                             }
                             let shortCmd = cmd.count > 20 ? String(cmd.prefix(20)) + "…" : cmd
                             let serverLabel = "[\(remote.name)] "
+                            let message: String
                             if !shortCmd.isEmpty {
-                                messages.append("\(serverLabel)\(toolIcon) \(shortCmd)\n📁 \(folder)")
+                                message = "\(serverLabel)\(toolIcon) \(shortCmd)\n📁 \(folder)"
                             } else {
-                                messages.append("\(serverLabel)\(toolIcon) \(tool)\n📁 \(folder)")
+                                message = "\(serverLabel)\(toolIcon) \(tool)\n📁 \(folder)"
                             }
+                            sessions.append(SessionInfo(
+                                message: message,
+                                cwd: cwd,
+                                sessionId: sessionId,
+                                isRemote: true,
+                                remoteName: remote.name
+                            ))
                         }
                     }
                 }
             } catch {
             }
         }
-        return messages
+        return sessions
     }
 
-    private func checkAllSessions() -> [String] {
-        var messages: [String] = []
+    private func checkAllSessions() -> [SessionInfo] {
+        var sessions: [SessionInfo] = []
 
         let statusDir = "/tmp/maxwell_claude"
         let fileManager = FileManager.default
 
         guard let files = try? fileManager.contentsOfDirectory(atPath: statusDir) else {
-            return messages
+            return sessions
         }
 
         let now = Int(Date().timeIntervalSince1970)
@@ -1063,15 +1285,23 @@ class ClaudeMonitor {
                 default: toolIcon = "⚠️"
                 }
                 let shortCmd = cmd.count > 20 ? String(cmd.prefix(20)) + "…" : cmd
+                let message: String
                 if !shortCmd.isEmpty {
-                    messages.append("\(toolIcon) \(shortCmd)\n📁 \(folder)")
+                    message = "\(toolIcon) \(shortCmd)\n📁 \(folder)"
                 } else {
-                    messages.append("\(toolIcon) \(tool)\n📁 \(folder)")
+                    message = "\(toolIcon) \(tool)\n📁 \(folder)"
                 }
+                sessions.append(SessionInfo(
+                    message: message,
+                    cwd: cwd,
+                    sessionId: session,
+                    isRemote: false,
+                    remoteName: nil
+                ))
             }
         }
 
-        return messages
+        return sessions
     }
 
     private func cleanupStoppedMarkers() {
@@ -1480,8 +1710,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
 
         claudeMonitor = ClaudeMonitor()
-        claudeMonitor.onClaudeWaiting = { [weak self] messages in
-            self?.showNotifications(messages: messages)
+        claudeMonitor.onClaudeWaiting = { [weak self] sessions in
+            self?.showNotifications(sessions: sessions)
         }
         claudeMonitor.onClaudeNotWaiting = { [weak self] in
             self?.hideNotifications()
@@ -1493,11 +1723,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.hideFinishedNotifications()
         }
         claudeMonitor.start()
+
+        containerView.onBubbleClick = { [weak self] session in
+            self?.switchToApp(for: session)
+        }
     }
 
-    func showNotifications(messages: [String]) {
-        containerView.showBubbles(messages: messages)
+    func showNotifications(sessions: [SessionInfo]) {
+        containerView.showBubbles(sessions: sessions)
         startJumping()
+    }
+
+    func switchToApp(for session: SessionInfo) {
+        if session.isRemote {
+            return
+        }
+
+        let cwd = session.cwd
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let codeProcess = Process()
+            codeProcess.launchPath = "/usr/bin/env"
+            codeProcess.arguments = ["code", "-r", "-g", "\(cwd)/."]
+            codeProcess.standardOutput = FileHandle.nullDevice
+            codeProcess.standardError = FileHandle.nullDevice
+
+            do {
+                try codeProcess.run()
+                codeProcess.waitUntilExit()
+
+                if codeProcess.terminationStatus != 0 {
+                    let openProcess = Process()
+                    openProcess.launchPath = "/usr/bin/open"
+                    openProcess.arguments = ["-a", "Visual Studio Code", cwd]
+                    openProcess.standardOutput = FileHandle.nullDevice
+                    openProcess.standardError = FileHandle.nullDevice
+                    try? openProcess.run()
+                    openProcess.waitUntilExit()
+                }
+            } catch {
+                let openProcess = Process()
+                openProcess.launchPath = "/usr/bin/open"
+                openProcess.arguments = ["-a", "Visual Studio Code", cwd]
+                openProcess.standardOutput = FileHandle.nullDevice
+                openProcess.standardError = FileHandle.nullDevice
+                try? openProcess.run()
+            }
+        }
     }
 
     func hideNotifications() {
@@ -1506,6 +1778,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showFinishedNotifications(messages: [String]) {
+        let config = MaxwellConfig.load()
+        guard config.showDoneBubbles else { return }
         containerView.showFinishedBubbles(messages: messages)
         hasFinishedBubbles = true
     }
@@ -1557,12 +1831,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let bounceProgress = sin(progress * .pi)
             let newY = self.originalY + jumpHeight * CGFloat(bounceProgress)
             self.window.setFrameOrigin(NSPoint(x: self.window.frame.origin.x, y: newY))
-            self.containerView.updateBubblePositions()
 
             if currentStep >= steps {
                 timer.invalidate()
                 self.window.setFrameOrigin(NSPoint(x: self.window.frame.origin.x, y: self.originalY))
-                self.containerView.updateBubblePositions()
                 self.doOneJump()
             }
         }
@@ -1600,6 +1872,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyGifSpeed() {
         let config = MaxwellConfig.load()
         gifView.speed = config.gifSpeed
+        if !config.showDoneBubbles {
+            hideFinishedNotifications()
+        }
     }
 
     private func saveWindowFrame() {
