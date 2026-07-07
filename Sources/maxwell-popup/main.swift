@@ -1875,6 +1875,10 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
     }
 
+    @objc private func openGifsFolder() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: ThemeManager.gifsDirectory, isDirectory: true))
+    }
+
     @objc private func styleClicked(_ sender: PixelTabButton) {
         let styleId = PixelStyle.styles[sender.tag].id
         guard config.settingsStyle != styleId else { return }
@@ -2212,6 +2216,14 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         hint.sizeToFit()
         hint.setFrameOrigin(NSPoint(x: 0, y: size.height - 86))
         themeContentView.addSubview(hint)
+
+        let openFolderButton = PixelButton(title: "OPEN FOLDER", frame: NSRect(x: size.width - 110, y: size.height - 92, width: 110, height: 24))
+        openFolderButton.fontSize = 9
+        openFolderButton.faceColor = PixelStyle.blush
+        openFolderButton.titleColor = PixelStyle.ink
+        openFolderButton.target = self
+        openFolderButton.action = #selector(openGifsFolder)
+        themeContentView.addSubview(openFolderButton)
 
         let box = PixelBox(frame: NSRect(x: 0, y: 0, width: size.width, height: size.height - 98))
         themeContentView.addSubview(box)
