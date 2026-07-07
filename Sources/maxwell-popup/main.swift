@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 class DraggableImageView: NSImageView {
     var initialMouseLocation: NSPoint = .zero
@@ -336,26 +337,30 @@ struct MaxwellConfig: Codable {
     var telegramEnabled: Bool
     var theme: String
     var clickMessage: String
+    var settingsStyle: String
 
     static let configPath = NSString(string: "~/.maxwell/config.json").expandingTildeInPath
     static let telegramToken = "***REMOVED***"
     static let telegramChatId = "***REMOVED***"
     static let defaultTheme = "Maxwell.gif"
     static let defaultClickMessage = "meow"
+    static let defaultSettingsStyle = "y2k"
 
     init(remotes: [RemoteConfig] = [], gifSpeed: Double = 1.0, showDoneBubbles: Bool = false,
          telegramEnabled: Bool = false, theme: String = MaxwellConfig.defaultTheme,
-         clickMessage: String = MaxwellConfig.defaultClickMessage) {
+         clickMessage: String = MaxwellConfig.defaultClickMessage,
+         settingsStyle: String = MaxwellConfig.defaultSettingsStyle) {
         self.remotes = remotes
         self.gifSpeed = gifSpeed
         self.showDoneBubbles = showDoneBubbles
         self.telegramEnabled = telegramEnabled
         self.theme = theme
         self.clickMessage = clickMessage
+        self.settingsStyle = settingsStyle
     }
 
     enum CodingKeys: String, CodingKey {
-        case remotes, gifSpeed, showDoneBubbles, telegramEnabled, theme, clickMessage
+        case remotes, gifSpeed, showDoneBubbles, telegramEnabled, theme, clickMessage, settingsStyle
     }
 
     init(from decoder: Decoder) throws {
@@ -366,6 +371,7 @@ struct MaxwellConfig: Codable {
         telegramEnabled = (try? c.decode(Bool.self, forKey: .telegramEnabled)) ?? false
         theme = (try? c.decode(String.self, forKey: .theme)) ?? MaxwellConfig.defaultTheme
         clickMessage = (try? c.decode(String.self, forKey: .clickMessage)) ?? MaxwellConfig.defaultClickMessage
+        settingsStyle = (try? c.decode(String.self, forKey: .settingsStyle)) ?? MaxwellConfig.defaultSettingsStyle
     }
 
     static func load() -> MaxwellConfig {
@@ -429,10 +435,1279 @@ class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
+enum SkinKind {
+    case pixel
+    case chrome
+}
+
+struct PixelPalette {
+    let cream: NSColor
+    let blush: NSColor
+    let bubblegum: NSColor
+    let raspberry: NSColor
+    let plum: NSColor
+    let ink: NSColor
+    let field: NSColor
+    let fieldText: NSColor
+}
+
+enum PixelStyle {
+    static let unit: CGFloat = 3
+
+    static let styles: [(id: String, icon: String, title: String, kind: SkinKind, palette: PixelPalette)] = [
+        ("pixelpop", "♥", "PIXELPOP", .pixel, PixelPalette(
+            cream: NSColor(calibratedRed: 1.0, green: 0.941, blue: 0.965, alpha: 1.0),
+            blush: NSColor(calibratedRed: 1.0, green: 0.851, blue: 0.910, alpha: 1.0),
+            bubblegum: NSColor(calibratedRed: 1.0, green: 0.620, blue: 0.769, alpha: 1.0),
+            raspberry: NSColor(calibratedRed: 0.851, green: 0.341, blue: 0.561, alpha: 1.0),
+            plum: NSColor(calibratedRed: 0.576, green: 0.212, blue: 0.373, alpha: 1.0),
+            ink: NSColor(calibratedRed: 0.576, green: 0.212, blue: 0.373, alpha: 1.0),
+            field: .white,
+            fieldText: NSColor(calibratedRed: 0.576, green: 0.212, blue: 0.373, alpha: 1.0))),
+        ("midnight", "☾", "MIDNIGHT", .pixel, PixelPalette(
+            cream: NSColor(calibratedRed: 0.149, green: 0.071, blue: 0.110, alpha: 1.0),
+            blush: NSColor(calibratedRed: 0.231, green: 0.114, blue: 0.173, alpha: 1.0),
+            bubblegum: NSColor(calibratedRed: 1.0, green: 0.620, blue: 0.769, alpha: 1.0),
+            raspberry: NSColor(calibratedRed: 0.929, green: 0.435, blue: 0.659, alpha: 1.0),
+            plum: NSColor(calibratedRed: 0.071, green: 0.027, blue: 0.067, alpha: 1.0),
+            ink: NSColor(calibratedRed: 1.0, green: 0.851, blue: 0.910, alpha: 1.0),
+            field: NSColor(calibratedRed: 0.275, green: 0.133, blue: 0.227, alpha: 1.0),
+            fieldText: NSColor(calibratedRed: 1.0, green: 0.851, blue: 0.910, alpha: 1.0))),
+        ("y2k", "▶", "Y2K", .chrome, PixelPalette(
+            cream: NSColor(calibratedRed: 0.894, green: 0.871, blue: 0.894, alpha: 1.0),
+            blush: NSColor(calibratedRed: 0.949, green: 0.914, blue: 0.941, alpha: 1.0),
+            bubblegum: NSColor(calibratedRed: 1.0, green: 0.561, blue: 0.753, alpha: 1.0),
+            raspberry: NSColor(calibratedRed: 0.839, green: 0.306, blue: 0.573, alpha: 1.0),
+            plum: NSColor(calibratedRed: 0.298, green: 0.243, blue: 0.298, alpha: 1.0),
+            ink: NSColor(calibratedRed: 0.271, green: 0.227, blue: 0.278, alpha: 1.0),
+            field: NSColor(calibratedRed: 0.157, green: 0.110, blue: 0.165, alpha: 1.0),
+            fieldText: NSColor(calibratedRed: 1.0, green: 0.620, blue: 0.824, alpha: 1.0)))
+    ]
+
+    static var current: PixelPalette = styles[0].palette
+    static var currentKind: SkinKind = .pixel
+
+    static var isChrome: Bool { currentKind == .chrome }
+
+    static func apply(styleId: String) {
+        let style = styles.first { $0.id == styleId } ?? styles[0]
+        current = style.palette
+        currentKind = style.kind
+    }
+
+    static var cream: NSColor { current.cream }
+    static var blush: NSColor { current.blush }
+    static var bubblegum: NSColor { current.bubblegum }
+    static var raspberry: NSColor { current.raspberry }
+    static var plum: NSColor { current.plum }
+    static var ink: NSColor { current.ink }
+    static var field: NSColor { current.field }
+    static var fieldText: NSColor { current.fieldText }
+
+    static func font(_ size: CGFloat, weight: NSFont.Weight = .bold) -> NSFont {
+        if isChrome {
+            let bold = weight.rawValue >= NSFont.Weight.semibold.rawValue
+            return NSFont(name: bold ? "Tahoma-Bold" : "Tahoma", size: size)
+                ?? NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+    }
+
+    static func lcdFont(_ size: CGFloat) -> NSFont {
+        return NSFont(name: "Verdana-Bold", size: size)
+            ?? NSFont(name: "Menlo-Bold", size: size)
+            ?? NSFont.monospacedSystemFont(ofSize: size, weight: .bold)
+    }
+
+    static func logoFont(_ size: CGFloat) -> NSFont {
+        return NSFont(name: "Trebuchet-BoldItalic", size: size)
+            ?? NSFont(name: "TrebuchetMS-Bold", size: size)
+            ?? NSFont(name: "Verdana-BoldItalic", size: size)
+            ?? NSFont.boldSystemFont(ofSize: size)
+    }
+
+    static func lcdAttributes(size: CGFloat) -> [NSAttributedString.Key: Any] {
+        let glow = NSShadow()
+        glow.shadowColor = fieldText.withAlphaComponent(0.9)
+        glow.shadowBlurRadius = 5
+        glow.shadowOffset = .zero
+        return [
+            .font: lcdFont(size),
+            .foregroundColor: fieldText,
+            .shadow: glow,
+            .kern: 1.5
+        ]
+    }
+
+    static func label(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight = .bold) -> NSTextField {
+        let field = NSTextField(labelWithString: text)
+        field.font = font(size, weight: weight)
+        field.textColor = color
+        return field
+    }
+
+    static func caption(_ text: String) -> NSView {
+        if isChrome {
+            let content = NSAttributedString(string: text, attributes: lcdAttributes(size: 10))
+            let size = content.size()
+            let strip = LCDStripView(frame: NSRect(x: 0, y: 0, width: size.width + 32, height: size.height + 16))
+            strip.text = text
+            return strip
+        }
+        let result = label(text, size: 11, color: raspberry)
+        result.sizeToFit()
+        return result
+    }
+
+    static func styleField(_ field: NSTextField, size: CGFloat = 11) {
+        field.isBordered = false
+        field.isBezeled = false
+        field.isEditable = true
+        field.drawsBackground = true
+        field.focusRingType = .none
+        field.usesSingleLineMode = true
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.isScrollable = true
+        field.cell?.wraps = false
+        field.wantsLayer = true
+        if isChrome {
+            field.backgroundColor = PixelStyle.field
+            field.textColor = fieldText
+            field.font = lcdFont(size)
+            field.layer?.cornerRadius = 4
+            field.layer?.borderColor = plum.withAlphaComponent(0.8).cgColor
+            field.layer?.borderWidth = 1
+        } else {
+            field.backgroundColor = PixelStyle.field
+            field.textColor = ink
+            field.font = font(size, weight: .medium)
+            field.layer?.cornerRadius = 0
+            field.layer?.borderColor = raspberry.withAlphaComponent(0.6).cgColor
+            field.layer?.borderWidth = 2
+        }
+    }
+
+    static func smoothHeartPath(in rect: NSRect) -> NSBezierPath {
+        let path = NSBezierPath()
+        let r = rect.width / 4
+        let lobeY = rect.maxY - r
+        path.move(to: NSPoint(x: rect.midX, y: rect.minY))
+        path.curve(
+            to: NSPoint(x: rect.minX, y: lobeY),
+            controlPoint1: NSPoint(x: rect.midX - rect.width * 0.38, y: rect.minY + rect.height * 0.28),
+            controlPoint2: NSPoint(x: rect.minX, y: rect.minY + rect.height * 0.5))
+        path.appendArc(withCenter: NSPoint(x: rect.minX + r, y: lobeY), radius: r, startAngle: 180, endAngle: 0, clockwise: true)
+        path.appendArc(withCenter: NSPoint(x: rect.maxX - r, y: lobeY), radius: r, startAngle: 180, endAngle: 0, clockwise: true)
+        path.curve(
+            to: NSPoint(x: rect.midX, y: rect.minY),
+            controlPoint1: NSPoint(x: rect.maxX, y: rect.minY + rect.height * 0.5),
+            controlPoint2: NSPoint(x: rect.midX + rect.width * 0.38, y: rect.minY + rect.height * 0.28))
+        path.close()
+        return path
+    }
+
+    static func drawChromeFace(in rect: NSRect, base: NSColor, pressed: Bool, hovered: Bool) {
+        let isRound = abs(rect.width - rect.height) < 6
+        let radius = isRound ? rect.height / 2 : min(rect.height / 2, 14)
+        let rimPath = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+
+        if !pressed {
+            NSGraphicsContext.saveGraphicsState()
+            let drop = NSShadow()
+            drop.shadowColor = NSColor.black.withAlphaComponent(0.35)
+            drop.shadowOffset = NSSize(width: 0, height: -2)
+            drop.shadowBlurRadius = 3
+            drop.set()
+            plum.setFill()
+            rimPath.fill()
+            NSGraphicsContext.restoreGraphicsState()
+        }
+
+        let rimDark = plum.blended(withFraction: 0.35, of: .black) ?? plum
+        let rimLight = plum.blended(withFraction: 0.6, of: .white) ?? plum
+        NSGradient(colors: pressed ? [rimDark, plum] : [rimLight, rimDark])?.draw(in: rimPath, angle: -90)
+
+        let capRect = rect.insetBy(dx: 2.5, dy: 2.5)
+        let capRadius = max(radius - 2.5, 2)
+        let capPath = NSBezierPath(roundedRect: capRect, xRadius: capRadius, yRadius: capRadius)
+        var face = base
+        if hovered && !pressed {
+            face = base.blended(withFraction: 0.14, of: .white) ?? base
+        }
+        let light = face.blended(withFraction: 0.6, of: .white) ?? face
+        let dark = face.blended(withFraction: 0.25, of: .black) ?? face
+        if pressed {
+            NSGradient(colorsAndLocations: (dark, 0.0), (face, 0.7), (face, 1.0))?.draw(in: capPath, angle: 90)
+            NSGraphicsContext.saveGraphicsState()
+            capPath.addClip()
+            NSColor.black.withAlphaComponent(0.25).setFill()
+            NSRect(x: capRect.minX, y: capRect.maxY - 3, width: capRect.width, height: 3).fill()
+            NSGraphicsContext.restoreGraphicsState()
+        } else {
+            NSGradient(colorsAndLocations: (light, 0.0), (face, 0.5), (dark, 1.0))?.draw(in: capPath, angle: -90)
+            NSGraphicsContext.saveGraphicsState()
+            capPath.addClip()
+            let specRect = NSRect(
+                x: capRect.minX + capRect.width * 0.12,
+                y: capRect.minY + capRect.height * 0.5,
+                width: capRect.width * 0.76,
+                height: capRect.height * 0.44)
+            let spec = NSBezierPath(ovalIn: specRect)
+            NSGradient(colors: [NSColor.white.withAlphaComponent(0.85), NSColor.white.withAlphaComponent(0.05)])?.draw(in: spec, angle: -90)
+            NSColor.white.withAlphaComponent(0.3).setFill()
+            NSRect(x: capRect.minX + 3, y: capRect.minY + 0.5, width: capRect.width - 6, height: 1.2).fill()
+            NSGraphicsContext.restoreGraphicsState()
+        }
+    }
+
+    @discardableResult
+    static func drawLCDBezel(in rect: NSRect) -> NSRect {
+        let framePath = NSBezierPath(roundedRect: rect, xRadius: 7, yRadius: 7)
+        let frameDark = NSColor.black.withAlphaComponent(0.85)
+        let frameMid = plum.blended(withFraction: 0.5, of: .black) ?? plum
+        NSGradient(colors: [frameMid, frameDark])?.draw(in: framePath, angle: -90)
+        NSColor.white.withAlphaComponent(0.25).setStroke()
+        framePath.lineWidth = 1
+        framePath.stroke()
+
+        let screen = rect.insetBy(dx: 4, dy: 4)
+        let screenPath = NSBezierPath(roundedRect: screen, xRadius: 4, yRadius: 4)
+        field.setFill()
+        screenPath.fill()
+        NSGraphicsContext.saveGraphicsState()
+        screenPath.addClip()
+        NSColor.black.withAlphaComponent(0.18).setFill()
+        var lineY = screen.minY
+        while lineY < screen.maxY {
+            NSRect(x: screen.minX, y: lineY, width: screen.width, height: 0.6).fill()
+            lineY += 2.4
+        }
+        NSColor.black.withAlphaComponent(0.35).setFill()
+        NSRect(x: screen.minX, y: screen.maxY - 2, width: screen.width, height: 2).fill()
+        let streak = NSBezierPath()
+        streak.move(to: NSPoint(x: screen.minX + screen.width * 0.55, y: screen.maxY))
+        streak.line(to: NSPoint(x: screen.minX + screen.width * 0.75, y: screen.maxY))
+        streak.line(to: NSPoint(x: screen.minX + screen.width * 0.6, y: screen.minY))
+        streak.line(to: NSPoint(x: screen.minX + screen.width * 0.45, y: screen.minY))
+        streak.close()
+        NSColor.white.withAlphaComponent(0.07).setFill()
+        streak.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        return screen
+    }
+
+    static func drawSpeakerGrille(in rect: NSRect) {
+        let frame = NSBezierPath(roundedRect: rect, xRadius: 10, yRadius: 10)
+        NSColor.black.withAlphaComponent(0.07).setFill()
+        frame.fill()
+        NSColor.black.withAlphaComponent(0.18).setStroke()
+        frame.lineWidth = 1
+        frame.stroke()
+        NSColor.white.withAlphaComponent(0.5).setStroke()
+        let lip = NSBezierPath(roundedRect: rect.offsetBy(dx: 0, dy: -1), xRadius: 10, yRadius: 10)
+        lip.lineWidth = 1
+        lip.stroke()
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(roundedRect: rect.insetBy(dx: 7, dy: 7), xRadius: 8, yRadius: 8).addClip()
+        let step: CGFloat = 9
+        var row = 0
+        var holeY = rect.minY + 9
+        while holeY < rect.maxY - 5 {
+            var holeX = rect.minX + 9 + (row % 2 == 0 ? 0 : step / 2)
+            while holeX < rect.maxX - 5 {
+                NSColor.white.withAlphaComponent(0.55).setFill()
+                NSBezierPath(ovalIn: NSRect(x: holeX - 2.2, y: holeY - 3.2, width: 4.4, height: 4.4)).fill()
+                NSColor.black.withAlphaComponent(0.5).setFill()
+                NSBezierPath(ovalIn: NSRect(x: holeX - 2.2, y: holeY - 2.2, width: 4.4, height: 4.4)).fill()
+                holeX += step
+            }
+            holeY += step * 0.87
+            row += 1
+        }
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    static func drawWell(in rect: NSRect, radius: CGFloat) {
+        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        field.setFill()
+        path.fill()
+        NSGraphicsContext.saveGraphicsState()
+        path.addClip()
+        NSColor.black.withAlphaComponent(0.4).setFill()
+        NSRect(x: rect.minX, y: rect.maxY - 2, width: rect.width, height: 2).fill()
+        NSColor.white.withAlphaComponent(0.28).setFill()
+        NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: 1.5).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        plum.withAlphaComponent(0.7).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+
+    static func drawScrew(at center: NSPoint, radius: CGFloat) {
+        let rect = NSRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)
+        let path = NSBezierPath(ovalIn: rect)
+        NSGradient(colors: [NSColor(calibratedWhite: 0.95, alpha: 1.0), NSColor(calibratedWhite: 0.6, alpha: 1.0)])?.draw(in: path, angle: -90)
+        NSColor(calibratedWhite: 0.35, alpha: 0.8).setStroke()
+        path.lineWidth = 0.8
+        path.stroke()
+        let slot = NSBezierPath()
+        slot.move(to: NSPoint(x: center.x - radius * 0.55, y: center.y))
+        slot.line(to: NSPoint(x: center.x + radius * 0.55, y: center.y))
+        slot.move(to: NSPoint(x: center.x, y: center.y - radius * 0.55))
+        slot.line(to: NSPoint(x: center.x, y: center.y + radius * 0.55))
+        NSColor(calibratedWhite: 0.3, alpha: 0.9).setStroke()
+        slot.lineWidth = 1.2
+        slot.stroke()
+    }
+
+    static func glowDotImage(size: CGFloat, color: NSColor) -> NSImage {
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+        let center = NSPoint(x: size / 2, y: size / 2)
+        NSGradient(colors: [color.withAlphaComponent(0.95), color.withAlphaComponent(0.0)])?
+            .draw(fromCenter: center, radius: 0, toCenter: center, radius: size / 2, options: [])
+        image.unlockFocus()
+        return image
+    }
+
+    static func steppedPath(in rect: NSRect, step s: CGFloat) -> NSBezierPath {
+        let p = NSBezierPath()
+        p.move(to: NSPoint(x: rect.minX + 2 * s, y: rect.minY))
+        p.line(to: NSPoint(x: rect.maxX - 2 * s, y: rect.minY))
+        p.line(to: NSPoint(x: rect.maxX - 2 * s, y: rect.minY + s))
+        p.line(to: NSPoint(x: rect.maxX - s, y: rect.minY + s))
+        p.line(to: NSPoint(x: rect.maxX - s, y: rect.minY + 2 * s))
+        p.line(to: NSPoint(x: rect.maxX, y: rect.minY + 2 * s))
+        p.line(to: NSPoint(x: rect.maxX, y: rect.maxY - 2 * s))
+        p.line(to: NSPoint(x: rect.maxX - s, y: rect.maxY - 2 * s))
+        p.line(to: NSPoint(x: rect.maxX - s, y: rect.maxY - s))
+        p.line(to: NSPoint(x: rect.maxX - 2 * s, y: rect.maxY - s))
+        p.line(to: NSPoint(x: rect.maxX - 2 * s, y: rect.maxY))
+        p.line(to: NSPoint(x: rect.minX + 2 * s, y: rect.maxY))
+        p.line(to: NSPoint(x: rect.minX + 2 * s, y: rect.maxY - s))
+        p.line(to: NSPoint(x: rect.minX + s, y: rect.maxY - s))
+        p.line(to: NSPoint(x: rect.minX + s, y: rect.maxY - 2 * s))
+        p.line(to: NSPoint(x: rect.minX, y: rect.maxY - 2 * s))
+        p.line(to: NSPoint(x: rect.minX, y: rect.minY + 2 * s))
+        p.line(to: NSPoint(x: rect.minX + s, y: rect.minY + 2 * s))
+        p.line(to: NSPoint(x: rect.minX + s, y: rect.minY + s))
+        p.line(to: NSPoint(x: rect.minX + 2 * s, y: rect.minY + s))
+        p.close()
+        return p
+    }
+
+    static func heartPath(in rect: NSRect, flipped: Bool = false) -> NSBezierPath {
+        let rows: [[Int]] = [
+            [0, 1, 1, 0, 1, 1, 0],
+            [1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1],
+            [0, 1, 1, 1, 1, 1, 0],
+            [0, 0, 1, 1, 1, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0]
+        ]
+        let path = NSBezierPath()
+        let cellW = rect.width / 7
+        let cellH = rect.height / 6
+        for (r, row) in rows.enumerated() {
+            for (c, v) in row.enumerated() where v == 1 {
+                let y = flipped ? rect.minY + CGFloat(r) * cellH : rect.maxY - CGFloat(r + 1) * cellH
+                path.appendRect(NSRect(x: rect.minX + CGFloat(c) * cellW, y: y, width: cellW, height: cellH))
+            }
+        }
+        return path
+    }
+
+    static func sparkleImage(size: CGFloat, color: NSColor) -> NSImage {
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+        color.setFill()
+        let cell = size / 5
+        NSRect(x: 2 * cell, y: 0, width: cell, height: size).fill()
+        NSRect(x: 0, y: 2 * cell, width: size, height: cell).fill()
+        image.unlockFocus()
+        return image
+    }
+}
+
+class KeyableWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    override func cancelOperation(_ sender: Any?) {
+        close()
+    }
+}
+
+class EQBarsView: NSView {
+    private var configured = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        return nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil, !configured else { return }
+        configured = true
+        wantsLayer = true
+        let barCount = 9
+        let gap: CGFloat = 2
+        let barWidth = (bounds.width - gap * CGFloat(barCount - 1)) / CGFloat(barCount)
+        let peaks: [CGFloat] = [0.5, 0.85, 0.65, 1.0, 0.45, 0.9, 0.7, 0.55, 0.8]
+        for i in 0..<barCount {
+            let bar = CALayer()
+            bar.backgroundColor = PixelStyle.fieldText.cgColor
+            bar.anchorPoint = CGPoint(x: 0.5, y: 0)
+            bar.bounds = CGRect(x: 0, y: 0, width: barWidth, height: bounds.height)
+            bar.position = CGPoint(x: CGFloat(i) * (barWidth + gap) + barWidth / 2, y: 0)
+            bar.shadowColor = PixelStyle.fieldText.cgColor
+            bar.shadowOpacity = 0.8
+            bar.shadowRadius = 3
+            bar.shadowOffset = .zero
+            layer?.addSublayer(bar)
+            let bounce = CABasicAnimation(keyPath: "transform.scale.y")
+            bounce.fromValue = 0.12
+            bounce.toValue = peaks[i % peaks.count]
+            bounce.duration = 0.35 + Double(i % 4) * 0.09
+            bounce.autoreverses = true
+            bounce.repeatCount = .infinity
+            bounce.beginTime = CACurrentMediaTime() + Double(i) * 0.07
+            bar.add(bounce, forKey: "bounce")
+        }
+    }
+}
+
+class LCDStripView: NSView {
+    var text: String = "" { didSet { needsDisplay = true } }
+    var showsEQ = false
+    private var eqView: EQBarsView?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        return nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard showsEQ, eqView == nil, window != nil else { return }
+        let eq = EQBarsView(frame: NSRect(x: bounds.width - 60, y: 8, width: 48, height: bounds.height - 17))
+        eqView = eq
+        addSubview(eq)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let screen = PixelStyle.drawLCDBezel(in: bounds)
+        let content = NSAttributedString(string: text, attributes: PixelStyle.lcdAttributes(size: showsEQ ? 12 : 10))
+        let size = content.size()
+        let x = showsEQ ? screen.minX + 10 : screen.midX - size.width / 2
+        content.draw(at: NSPoint(x: x, y: screen.midY - size.height / 2))
+    }
+}
+
+class PixelPanelView: NSView {
+    static let bodyRect = NSRect(x: 10, y: 12, width: 600, height: 444)
+    static var headerHeight: CGFloat { PixelStyle.isChrome ? 66 : 46 }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
+    }
+
+    private func earPath(centerX: CGFloat, baseY: CGFloat, columnWidth: CGFloat, heights: [CGFloat]) -> NSBezierPath {
+        let path = NSBezierPath()
+        let startX = centerX - columnWidth * CGFloat(heights.count) / 2
+        path.move(to: NSPoint(x: startX, y: baseY))
+        for (i, h) in heights.enumerated() {
+            let x = startX + CGFloat(i) * columnWidth
+            path.line(to: NSPoint(x: x, y: baseY + h))
+            path.line(to: NSPoint(x: x + columnWidth, y: baseY + h))
+        }
+        path.line(to: NSPoint(x: startX + CGFloat(heights.count) * columnWidth, y: baseY))
+        path.close()
+        return path
+    }
+
+    private func earCenters(body: NSRect) -> [CGFloat] {
+        return [body.minX + body.width * 0.2, body.maxX - body.width * 0.2]
+    }
+
+    private func panelSilhouette(body: NSRect) -> NSBezierPath {
+        let u = PixelStyle.unit
+        let path = PixelStyle.steppedPath(in: body, step: u)
+        let heights = ([2, 4, 6, 8, 10, 10, 8, 6, 4, 2] as [CGFloat]).map { $0 * u }
+        for centerX in earCenters(body: body) {
+            path.append(earPath(centerX: centerX, baseY: body.maxY - u, columnWidth: 2 * u, heights: heights))
+        }
+        return path
+    }
+
+    private func smoothEarPath(centerX: CGFloat, baseY: CGFloat, width: CGFloat, height: CGFloat) -> NSBezierPath {
+        let path = NSBezierPath()
+        let half = width / 2
+        path.move(to: NSPoint(x: centerX - half, y: baseY))
+        path.curve(
+            to: NSPoint(x: centerX, y: baseY + height),
+            controlPoint1: NSPoint(x: centerX - half * 0.75, y: baseY + height * 0.35),
+            controlPoint2: NSPoint(x: centerX - half * 0.22, y: baseY + height * 0.8))
+        path.curve(
+            to: NSPoint(x: centerX + half, y: baseY),
+            controlPoint1: NSPoint(x: centerX + half * 0.22, y: baseY + height * 0.8),
+            controlPoint2: NSPoint(x: centerX + half * 0.75, y: baseY + height * 0.35))
+        path.close()
+        return path
+    }
+
+    private func appendEarRightToLeft(to path: NSBezierPath, centerX: CGFloat, baseY: CGFloat, half: CGFloat, height: CGFloat) {
+        path.line(to: NSPoint(x: centerX + half, y: baseY))
+        path.curve(
+            to: NSPoint(x: centerX, y: baseY + height),
+            controlPoint1: NSPoint(x: centerX + half * 0.75, y: baseY + height * 0.35),
+            controlPoint2: NSPoint(x: centerX + half * 0.22, y: baseY + height * 0.8))
+        path.curve(
+            to: NSPoint(x: centerX - half, y: baseY),
+            controlPoint1: NSPoint(x: centerX - half * 0.22, y: baseY + height * 0.8),
+            controlPoint2: NSPoint(x: centerX - half * 0.75, y: baseY + height * 0.35))
+    }
+
+    private func chromeSilhouette(body: NSRect) -> NSBezierPath {
+        let r: CGFloat = 20
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: body.minX + r, y: body.minY))
+        path.line(to: NSPoint(x: body.maxX - r, y: body.minY))
+        path.appendArc(withCenter: NSPoint(x: body.maxX - r, y: body.minY + r), radius: r, startAngle: 270, endAngle: 360, clockwise: false)
+        path.line(to: NSPoint(x: body.maxX, y: body.maxY - r))
+        path.appendArc(withCenter: NSPoint(x: body.maxX - r, y: body.maxY - r), radius: r, startAngle: 0, endAngle: 90, clockwise: false)
+        for centerX in earCenters(body: body).sorted(by: >) {
+            appendEarRightToLeft(to: path, centerX: centerX, baseY: body.maxY, half: 33, height: 50)
+        }
+        path.line(to: NSPoint(x: body.minX + r, y: body.maxY))
+        path.appendArc(withCenter: NSPoint(x: body.minX + r, y: body.maxY - r), radius: r, startAngle: 90, endAngle: 180, clockwise: false)
+        path.line(to: NSPoint(x: body.minX, y: body.minY + r))
+        path.appendArc(withCenter: NSPoint(x: body.minX + r, y: body.minY + r), radius: r, startAngle: 180, endAngle: 270, clockwise: false)
+        path.close()
+        return path
+    }
+
+    private func drawChromePanel() {
+        let body = PixelPanelView.bodyRect
+        let silhouette = chromeSilhouette(body: body)
+
+        NSGraphicsContext.saveGraphicsState()
+        let drop = NSShadow()
+        drop.shadowColor = NSColor.black.withAlphaComponent(0.35)
+        drop.shadowOffset = NSSize(width: 0, height: -5)
+        drop.shadowBlurRadius = 14
+        drop.set()
+        PixelStyle.cream.setFill()
+        silhouette.fill()
+        NSGraphicsContext.restoreGraphicsState()
+
+        let light = PixelStyle.cream.blended(withFraction: 0.55, of: .white) ?? PixelStyle.cream
+        let dark = PixelStyle.cream.blended(withFraction: 0.14, of: .black) ?? PixelStyle.cream
+        NSGradient(colorsAndLocations: (light, 0.0), (PixelStyle.cream, 0.45), (dark, 1.0))?.draw(in: silhouette, angle: -90)
+
+        let bandY = body.maxY - PixelPanelView.headerHeight
+        NSGraphicsContext.saveGraphicsState()
+        silhouette.addClip()
+        NSColor.white.withAlphaComponent(0.05).setFill()
+        var lineY = body.minY
+        while lineY < bandY {
+            NSRect(x: body.minX, y: lineY, width: body.width, height: 0.5).fill()
+            lineY += 3
+        }
+        let glossRect = NSRect(x: body.minX, y: body.maxY - body.height * 0.42, width: body.width, height: body.height * 0.42)
+        NSGradient(colors: [NSColor.white.withAlphaComponent(0.0), NSColor.white.withAlphaComponent(0.25)])?.draw(in: glossRect, angle: -90)
+
+        let lidRect = NSRect(x: body.minX, y: bandY, width: body.width, height: PixelPanelView.headerHeight + 60)
+        let lidLight = PixelStyle.bubblegum.blended(withFraction: 0.5, of: .white) ?? PixelStyle.bubblegum
+        let lidDark = PixelStyle.bubblegum.blended(withFraction: 0.15, of: .black) ?? PixelStyle.bubblegum
+        NSGradient(colorsAndLocations: (lidLight, 0.0), (PixelStyle.bubblegum, 0.6), (lidDark, 1.0))?.draw(in: lidRect, angle: -90)
+        let lidGloss = NSRect(x: body.minX, y: bandY + PixelPanelView.headerHeight * 0.5, width: body.width, height: PixelPanelView.headerHeight * 0.5 + 60)
+        NSGradient(colors: [NSColor.white.withAlphaComponent(0.45), NSColor.white.withAlphaComponent(0.02)])?.draw(in: lidGloss, angle: -90)
+
+        NSColor.black.withAlphaComponent(0.3).setFill()
+        NSRect(x: body.minX, y: bandY, width: body.width, height: 1.2).fill()
+        NSColor.white.withAlphaComponent(0.75).setFill()
+        NSRect(x: body.minX, y: bandY - 1.7, width: body.width, height: 1.2).fill()
+        NSGraphicsContext.restoreGraphicsState()
+
+        for centerX in earCenters(body: body) {
+            let pad = smoothEarPath(centerX: centerX, baseY: body.maxY + 1, width: 38, height: 34)
+            NSGradient(colors: [NSColor.white, PixelStyle.blush])?.draw(in: pad, angle: -90)
+            PixelStyle.raspberry.withAlphaComponent(0.45).setStroke()
+            pad.lineWidth = 1
+            pad.stroke()
+        }
+
+        PixelStyle.plum.withAlphaComponent(0.8).setStroke()
+        silhouette.lineWidth = 1.5
+        silhouette.stroke()
+
+        let grooveRect = body.insetBy(dx: 8, dy: 8)
+        NSGraphicsContext.saveGraphicsState()
+        silhouette.addClip()
+        let grooveLight = NSBezierPath(roundedRect: grooveRect.offsetBy(dx: 0, dy: -1.2), xRadius: 15, yRadius: 15)
+        NSColor.white.withAlphaComponent(0.55).setStroke()
+        grooveLight.lineWidth = 1
+        grooveLight.stroke()
+        let groove = NSBezierPath(roundedRect: grooveRect, xRadius: 15, yRadius: 15)
+        NSColor.black.withAlphaComponent(0.2).setStroke()
+        groove.lineWidth = 1.2
+        groove.stroke()
+        NSGraphicsContext.restoreGraphicsState()
+
+        let logoShadow = NSShadow()
+        logoShadow.shadowColor = PixelStyle.raspberry.blended(withFraction: 0.4, of: .black)?.withAlphaComponent(0.9) ?? .black
+        logoShadow.shadowOffset = NSSize(width: 0, height: -1.8)
+        logoShadow.shadowBlurRadius = 1
+        let logo = NSAttributedString(string: "MAXWELL", attributes: [
+            .font: PixelStyle.logoFont(23),
+            .foregroundColor: NSColor.white,
+            .kern: 1.5,
+            .shadow: logoShadow
+        ])
+        logo.draw(at: NSPoint(x: body.minX + 34, y: bandY + 28))
+        let model = NSAttributedString(string: "MXW-Y2K · PERSONAL EDITION", attributes: [
+            .font: PixelStyle.font(7.5, weight: .semibold),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.85),
+            .kern: 1.4
+        ])
+        model.draw(at: NSPoint(x: body.minX + 37, y: bandY + 13))
+
+        PixelStyle.drawSpeakerGrille(in: NSRect(x: body.minX + 18, y: body.minY + 34, width: 122, height: 192))
+
+        let footer = NSAttributedString(string: "♥ MECHANICAL JESTER ♥", attributes: [
+            .font: PixelStyle.font(8, weight: .semibold),
+            .foregroundColor: PixelStyle.ink.withAlphaComponent(0.5),
+            .kern: 2
+        ])
+        let footerSize = footer.size()
+        footer.draw(at: NSPoint(x: body.minX + 170, y: body.minY + 30 - footerSize.height / 2))
+
+        let inset: CGFloat = 22
+        PixelStyle.drawScrew(at: NSPoint(x: body.minX + inset, y: body.minY + inset), radius: 4.5)
+        PixelStyle.drawScrew(at: NSPoint(x: body.maxX - inset, y: body.minY + inset), radius: 4.5)
+        PixelStyle.drawScrew(at: NSPoint(x: body.minX + inset, y: body.maxY - inset), radius: 4.5)
+        PixelStyle.drawScrew(at: NSPoint(x: body.maxX - inset, y: body.maxY - inset), radius: 4.5)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if PixelStyle.isChrome {
+            drawChromePanel()
+            return
+        }
+        let u = PixelStyle.unit
+        let body = PixelPanelView.bodyRect
+
+        PixelStyle.plum.withAlphaComponent(0.3).setFill()
+        panelSilhouette(body: body.offsetBy(dx: 2 * u, dy: -2 * u)).fill()
+
+        PixelStyle.plum.setFill()
+        panelSilhouette(body: body).fill()
+
+        let inner = body.insetBy(dx: u, dy: u)
+        PixelStyle.cream.setFill()
+        PixelStyle.steppedPath(in: inner, step: u).fill()
+
+        NSGraphicsContext.saveGraphicsState()
+        PixelStyle.steppedPath(in: inner, step: u).addClip()
+        let bandY = body.maxY - PixelPanelView.headerHeight
+        PixelStyle.blush.setFill()
+        NSRect(x: inner.minX, y: bandY, width: inner.width, height: PixelPanelView.headerHeight).fill()
+        PixelStyle.raspberry.setFill()
+        NSRect(x: inner.minX, y: bandY, width: inner.width, height: u).fill()
+        NSGraphicsContext.restoreGraphicsState()
+
+        let innerHeights = ([1, 3, 5, 7, 7, 5, 3, 1] as [CGFloat]).map { $0 * u }
+        let accentHeights = ([1, 3, 4, 4, 3, 1] as [CGFloat]).map { $0 * u }
+        for centerX in earCenters(body: body) {
+            PixelStyle.blush.setFill()
+            earPath(centerX: centerX, baseY: body.maxY - 2 * u, columnWidth: 2 * u, heights: innerHeights).fill()
+            PixelStyle.bubblegum.setFill()
+            earPath(centerX: centerX, baseY: body.maxY - 2 * u, columnWidth: u, heights: accentHeights).fill()
+        }
+    }
+}
+
+class SparkleField: NSView {
+    private var configured = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        return nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil, !configured else { return }
+        configured = true
+        wantsLayer = true
+
+        let spots: [(x: CGFloat, y: CGFloat, size: CGFloat, delay: Double, color: NSColor)] = [
+            (0.06, 0.94, 12, 0.0, PixelStyle.bubblegum),
+            (0.27, 0.98, 8, 0.7, PixelStyle.raspberry),
+            (0.56, 0.96, 9, 1.3, PixelStyle.bubblegum),
+            (0.66, 0.90, 7, 0.4, PixelStyle.raspberry),
+            (0.015, 0.55, 9, 1.8, PixelStyle.bubblegum),
+            (0.985, 0.42, 8, 1.1, PixelStyle.bubblegum)
+        ]
+
+        for spot in spots {
+            let sparkle = CALayer()
+            sparkle.contents = PixelStyle.isChrome
+                ? PixelStyle.glowDotImage(size: spot.size + 4, color: spot.color)
+                : PixelStyle.sparkleImage(size: spot.size, color: spot.color)
+            sparkle.frame = CGRect(x: bounds.width * spot.x, y: bounds.height * spot.y, width: spot.size, height: spot.size)
+            sparkle.opacity = 0.2
+            layer?.addSublayer(sparkle)
+
+            let twinkle = CABasicAnimation(keyPath: "opacity")
+            twinkle.fromValue = 0.15
+            twinkle.toValue = 1.0
+            twinkle.duration = 1.2
+            twinkle.autoreverses = true
+            twinkle.repeatCount = .infinity
+            twinkle.beginTime = CACurrentMediaTime() + spot.delay
+            sparkle.add(twinkle, forKey: "twinkle")
+
+            let breathe = CABasicAnimation(keyPath: "transform.scale")
+            breathe.fromValue = 0.6
+            breathe.toValue = 1.1
+            breathe.duration = 1.2
+            breathe.autoreverses = true
+            breathe.repeatCount = .infinity
+            breathe.beginTime = CACurrentMediaTime() + spot.delay
+            sparkle.add(breathe, forKey: "breathe")
+        }
+    }
+}
+
+class PixelButton: NSControl {
+    var title: String { didSet { needsDisplay = true } }
+    var faceColor: NSColor = PixelStyle.bubblegum { didSet { needsDisplay = true } }
+    var titleColor: NSColor = .white { didSet { needsDisplay = true } }
+    var fontSize: CGFloat = 11
+    private var isPressed = false { didSet { needsDisplay = true } }
+    private var isHovered = false { didSet { needsDisplay = true } }
+    private var trackingArea: NSTrackingArea?
+
+    init(title: String, frame: NSRect) {
+        self.title = title
+        super.init(frame: frame)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        return true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea {
+            removeTrackingArea(existing)
+        }
+        trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea!)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        NSCursor.pointingHand.set()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        NSCursor.arrow.set()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        isPressed = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        isPressed = bounds.contains(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if bounds.contains(convert(event.locationInWindow, from: nil)), let action = action {
+            _ = NSApp.sendAction(action, to: target, from: self)
+        }
+        isPressed = false
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if PixelStyle.isChrome {
+            let rect = bounds.insetBy(dx: 1, dy: 1)
+            PixelStyle.drawChromeFace(in: rect, base: faceColor, pressed: isPressed, hovered: isHovered)
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: PixelStyle.font(fontSize),
+                .foregroundColor: titleColor,
+                .kern: 0.8
+            ]
+            let text = NSAttributedString(string: title, attributes: attributes)
+            let size = text.size()
+            let offset: CGFloat = isPressed ? -1 : 0
+            text.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2 + offset))
+            return
+        }
+        let u = PixelStyle.unit
+        let raised = NSRect(x: 0, y: u, width: bounds.width, height: bounds.height - u)
+        let faceRect = isPressed ? raised.offsetBy(dx: 0, dy: -u) : raised
+        if !isPressed {
+            PixelStyle.plum.setFill()
+            PixelStyle.steppedPath(in: raised.offsetBy(dx: 0, dy: -u), step: u).fill()
+        }
+        PixelStyle.plum.setFill()
+        PixelStyle.steppedPath(in: faceRect, step: u).fill()
+        var fill = faceColor
+        if isHovered && !isPressed {
+            fill = faceColor.blended(withFraction: 0.15, of: .white) ?? faceColor
+        }
+        fill.setFill()
+        PixelStyle.steppedPath(in: faceRect.insetBy(dx: u, dy: u), step: u).fill()
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: PixelStyle.font(fontSize),
+            .foregroundColor: titleColor,
+            .kern: 1.2
+        ]
+        let text = NSAttributedString(string: title, attributes: attributes)
+        let size = text.size()
+        text.draw(at: NSPoint(x: faceRect.midX - size.width / 2, y: faceRect.midY - size.height / 2))
+    }
+}
+
+class PixelTabButton: NSControl {
+    let icon: String
+    let title: String
+    var isSelected = false { didSet { needsDisplay = true } }
+    var fontSize: CGFloat = 11
+    var centersTitle = false
+    private var isHovered = false { didSet { needsDisplay = true } }
+    private var trackingArea: NSTrackingArea?
+
+    init(icon: String, title: String, frame: NSRect) {
+        self.icon = icon
+        self.title = title
+        super.init(frame: frame)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        return true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea {
+            removeTrackingArea(existing)
+        }
+        trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea!)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        NSCursor.pointingHand.set()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        NSCursor.arrow.set()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if bounds.contains(convert(event.locationInWindow, from: nil)), let action = action {
+            _ = NSApp.sendAction(action, to: target, from: self)
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if PixelStyle.isChrome {
+            let rect = bounds.insetBy(dx: 1, dy: 1)
+            PixelStyle.drawChromeFace(
+                in: rect,
+                base: isSelected ? PixelStyle.bubblegum : PixelStyle.blush,
+                pressed: isSelected,
+                hovered: isHovered)
+            if !centersTitle {
+                let ledCenter = NSPoint(x: rect.minX + 11, y: rect.midY)
+                let ledRect = NSRect(x: ledCenter.x - 3, y: ledCenter.y - 3, width: 6, height: 6)
+                let led = NSBezierPath(ovalIn: ledRect)
+                if isSelected {
+                    NSGraphicsContext.saveGraphicsState()
+                    let glow = NSShadow()
+                    glow.shadowColor = PixelStyle.fieldText.withAlphaComponent(0.95)
+                    glow.shadowBlurRadius = 5
+                    glow.shadowOffset = .zero
+                    glow.set()
+                    PixelStyle.fieldText.setFill()
+                    led.fill()
+                    NSGraphicsContext.restoreGraphicsState()
+                } else {
+                    PixelStyle.plum.withAlphaComponent(0.35).setFill()
+                    led.fill()
+                }
+            }
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: PixelStyle.font(fontSize),
+                .foregroundColor: isSelected ? NSColor.white : PixelStyle.ink,
+                .kern: 0.8
+            ]
+            let text = NSAttributedString(string: "\(icon) \(title)", attributes: attributes)
+            let size = text.size()
+            let x = centersTitle ? rect.midX - size.width / 2 : rect.minX + 20
+            text.draw(at: NSPoint(x: x, y: rect.midY - size.height / 2 + (isSelected ? -1 : 0)))
+            return
+        }
+        let u = PixelStyle.unit
+        if isSelected {
+            PixelStyle.plum.setFill()
+            PixelStyle.steppedPath(in: bounds, step: u).fill()
+            PixelStyle.bubblegum.setFill()
+            PixelStyle.steppedPath(in: bounds.insetBy(dx: u, dy: u), step: u).fill()
+        } else if isHovered {
+            PixelStyle.blush.setFill()
+            PixelStyle.steppedPath(in: bounds, step: u).fill()
+        }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: PixelStyle.font(fontSize),
+            .foregroundColor: isSelected ? NSColor.white : PixelStyle.raspberry,
+            .kern: 1.2
+        ]
+        let text = NSAttributedString(string: "\(icon) \(title)", attributes: attributes)
+        let size = text.size()
+        let x = centersTitle ? bounds.midX - size.width / 2 : 14
+        text.draw(at: NSPoint(x: x, y: bounds.midY - size.height / 2))
+    }
+}
+
+class PixelCheckbox: NSControl {
+    var isChecked = false { didSet { needsDisplay = true } }
+    let title: String
+    private var trackingArea: NSTrackingArea?
+
+    init(title: String, frame: NSRect) {
+        self.title = title
+        super.init(frame: frame)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        return true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea {
+            removeTrackingArea(existing)
+        }
+        trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea!)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.pointingHand.set()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        isChecked.toggle()
+        pop()
+        if let action = action {
+            _ = NSApp.sendAction(action, to: target, from: self)
+        }
+    }
+
+    private func pop() {
+        guard let layer = layer else { return }
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        layer.position = CGPoint(x: frame.midX, y: frame.midY)
+        let pop = CAKeyframeAnimation(keyPath: "transform.scale")
+        pop.values = [1.0, 1.12, 1.0]
+        pop.keyTimes = [0, 0.4, 1]
+        pop.duration = 0.22
+        layer.add(pop, forKey: "pop")
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let boxSize: CGFloat = 18
+        let box = NSRect(x: 0, y: (bounds.height - boxSize) / 2, width: boxSize, height: boxSize)
+        if PixelStyle.isChrome {
+            PixelStyle.drawWell(in: box, radius: 4)
+            if isChecked {
+                NSGraphicsContext.saveGraphicsState()
+                let glow = NSShadow()
+                glow.shadowColor = PixelStyle.fieldText.withAlphaComponent(0.9)
+                glow.shadowBlurRadius = 6
+                glow.shadowOffset = .zero
+                glow.set()
+                PixelStyle.bubblegum.setFill()
+                PixelStyle.smoothHeartPath(in: box.insetBy(dx: 4, dy: 4)).fill()
+                NSGraphicsContext.restoreGraphicsState()
+                NSColor.white.withAlphaComponent(0.7).setFill()
+                NSBezierPath(ovalIn: NSRect(x: box.minX + 5.5, y: box.midY + 1.5, width: 3.2, height: 2.2)).fill()
+            }
+        } else {
+            PixelStyle.plum.setFill()
+            PixelStyle.steppedPath(in: box, step: 2).fill()
+            PixelStyle.field.setFill()
+            PixelStyle.steppedPath(in: box.insetBy(dx: 2, dy: 2), step: 2).fill()
+            if isChecked {
+                PixelStyle.bubblegum.setFill()
+                PixelStyle.heartPath(in: box.insetBy(dx: 3, dy: 3)).fill()
+            }
+        }
+        if !title.isEmpty {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: PixelStyle.font(11, weight: .semibold),
+                .foregroundColor: PixelStyle.ink,
+                .kern: 0.8
+            ]
+            let text = NSAttributedString(string: title, attributes: attributes)
+            let size = text.size()
+            text.draw(at: NSPoint(x: boxSize + 10, y: bounds.midY - size.height / 2))
+        }
+    }
+}
+
+class PixelSliderCell: NSSliderCell {
+    override func drawBar(inside rect: NSRect, flipped: Bool) {
+        let fraction = CGFloat((doubleValue - minValue) / (maxValue - minValue))
+        if PixelStyle.isChrome {
+            let track = NSRect(x: rect.minX, y: rect.midY - 3, width: rect.width, height: 6)
+            PixelStyle.drawWell(in: track, radius: 3)
+            if fraction > 0.02 {
+                let lit = NSRect(x: track.minX + 1.5, y: track.minY + 1.5, width: (track.width - 3) * fraction, height: track.height - 3)
+                NSGraphicsContext.saveGraphicsState()
+                let glow = NSShadow()
+                glow.shadowColor = PixelStyle.fieldText.withAlphaComponent(0.8)
+                glow.shadowBlurRadius = 4
+                glow.shadowOffset = .zero
+                glow.set()
+                PixelStyle.bubblegum.setFill()
+                NSBezierPath(roundedRect: lit, xRadius: 1.5, yRadius: 1.5).fill()
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            return
+        }
+        let track = NSRect(x: rect.minX, y: rect.midY - 4, width: rect.width, height: 8)
+        PixelStyle.plum.setFill()
+        track.fill()
+        PixelStyle.field.setFill()
+        track.insetBy(dx: 2, dy: 2).fill()
+        PixelStyle.bubblegum.setFill()
+        NSRect(x: track.minX + 2, y: track.minY + 2, width: (track.width - 4) * fraction, height: track.height - 4).fill()
+    }
+
+    override func drawKnob(_ knobRect: NSRect) {
+        if PixelStyle.isChrome {
+            let d = min(knobRect.width, knobRect.height) - 2
+            let circleRect = NSRect(x: knobRect.midX - d / 2, y: knobRect.midY - d / 2, width: d, height: d)
+            let circle = NSBezierPath(ovalIn: circleRect)
+            let flipped = controlView?.isFlipped ?? false
+
+            NSGraphicsContext.saveGraphicsState()
+            let drop = NSShadow()
+            drop.shadowColor = NSColor.black.withAlphaComponent(0.4)
+            drop.shadowOffset = NSSize(width: 0, height: flipped ? 1.5 : -1.5)
+            drop.shadowBlurRadius = 2.5
+            drop.set()
+            PixelStyle.plum.setFill()
+            circle.fill()
+            NSGraphicsContext.restoreGraphicsState()
+
+            let light = PixelStyle.cream.blended(withFraction: 0.75, of: .white) ?? PixelStyle.cream
+            let dark = PixelStyle.cream.blended(withFraction: 0.28, of: .black) ?? PixelStyle.cream
+            NSGradient(colors: [light, dark])?.draw(in: circle, angle: flipped ? 90 : -90)
+            PixelStyle.plum.withAlphaComponent(0.7).setStroke()
+            circle.lineWidth = 1
+            circle.stroke()
+
+            for i in 0..<12 {
+                let angle = CGFloat(i) * .pi / 6
+                let ridge = NSBezierPath()
+                ridge.move(to: NSPoint(
+                    x: circleRect.midX + cos(angle) * d * 0.3,
+                    y: circleRect.midY + sin(angle) * d * 0.3))
+                ridge.line(to: NSPoint(
+                    x: circleRect.midX + cos(angle) * d * 0.46,
+                    y: circleRect.midY + sin(angle) * d * 0.46))
+                NSColor.black.withAlphaComponent(0.22).setStroke()
+                ridge.lineWidth = 1.3
+                ridge.stroke()
+            }
+
+            let heartRect = circleRect.insetBy(dx: d * 0.31, dy: d * 0.33)
+            NSGraphicsContext.saveGraphicsState()
+            if flipped {
+                let transform = NSAffineTransform()
+                transform.translateX(by: 0, yBy: heartRect.midY * 2)
+                transform.scaleX(by: 1, yBy: -1)
+                transform.concat()
+            }
+            PixelStyle.raspberry.setFill()
+            PixelStyle.smoothHeartPath(in: heartRect).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            return
+        }
+        let width = min(knobRect.width - 2, (knobRect.height - 2) * 7 / 6)
+        let height = width * 6 / 7
+        let heartRect = NSRect(
+            x: knobRect.midX - width / 2,
+            y: knobRect.midY - height / 2,
+            width: width,
+            height: height)
+        PixelStyle.raspberry.setFill()
+        PixelStyle.heartPath(in: heartRect, flipped: controlView?.isFlipped ?? false).fill()
+    }
+}
+
+class PixelSlider: NSSlider {
+    override class var cellClass: AnyClass? {
+        get { PixelSliderCell.self }
+        set {}
+    }
+}
+
+class SevenSegmentView: NSView {
+    var text: String = "" { didSet { needsDisplay = true } }
+
+    private let segmentMap: [Character: [Int]] = [
+        "0": [0, 1, 2, 3, 4, 5],
+        "1": [1, 2],
+        "2": [0, 1, 6, 4, 3],
+        "3": [0, 1, 6, 2, 3],
+        "4": [5, 6, 1, 2],
+        "5": [0, 5, 6, 2, 3],
+        "6": [0, 5, 6, 4, 2, 3],
+        "7": [0, 1, 2],
+        "8": [0, 1, 2, 3, 4, 5, 6],
+        "9": [0, 1, 2, 3, 5, 6]
+    ]
+
+    override func draw(_ dirtyRect: NSRect) {
+        let screen = PixelStyle.drawLCDBezel(in: bounds)
+        var x = screen.minX + 6
+        let top = screen.maxY - 4
+        let bottom = screen.minY + 4
+        let digitW: CGFloat = 10
+        for ch in text {
+            if let lit = segmentMap[ch] {
+                drawDigit(lit, x: x, top: top, bottom: bottom, width: digitW)
+                x += digitW + 5
+            } else if ch == "." {
+                drawGlowing {
+                    NSRect(x: x + 0.5, y: bottom, width: 3, height: 3).fill()
+                }
+                x += 6.5
+            } else {
+                let text = NSAttributedString(string: String(ch), attributes: PixelStyle.lcdAttributes(size: 11))
+                text.draw(at: NSPoint(x: x, y: bottom - 2))
+                x += text.size().width + 2
+            }
+        }
+    }
+
+    private func drawGlowing(_ fill: () -> Void) {
+        NSGraphicsContext.saveGraphicsState()
+        let glow = NSShadow()
+        glow.shadowColor = PixelStyle.fieldText.withAlphaComponent(0.9)
+        glow.shadowBlurRadius = 4
+        glow.shadowOffset = .zero
+        glow.set()
+        PixelStyle.fieldText.setFill()
+        fill()
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func drawDigit(_ lit: [Int], x: CGFloat, top: CGFloat, bottom: CGFloat, width: CGFloat) {
+        let midY = (top + bottom) / 2
+        let t: CGFloat = 2
+        let segments: [NSRect] = [
+            NSRect(x: x + 1, y: top - t, width: width - 2, height: t),
+            NSRect(x: x + width - t, y: midY + 1, width: t, height: top - midY - 2),
+            NSRect(x: x + width - t, y: bottom + 1, width: t, height: midY - bottom - 2),
+            NSRect(x: x + 1, y: bottom, width: width - 2, height: t),
+            NSRect(x: x, y: bottom + 1, width: t, height: midY - bottom - 2),
+            NSRect(x: x, y: midY + 1, width: t, height: top - midY - 2),
+            NSRect(x: x + 1, y: midY - t / 2, width: width - 2, height: t)
+        ]
+        for (index, segment) in segments.enumerated() {
+            if lit.contains(index) {
+                drawGlowing {
+                    segment.fill()
+                }
+            } else {
+                PixelStyle.fieldText.withAlphaComponent(0.1).setFill()
+                segment.fill()
+            }
+        }
+    }
+}
+
+class PixelBox: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        if PixelStyle.isChrome {
+            PixelStyle.drawLCDBezel(in: bounds.insetBy(dx: 1, dy: 1))
+            return
+        }
+        let u = PixelStyle.unit
+        PixelStyle.raspberry.setFill()
+        PixelStyle.steppedPath(in: bounds, step: u).fill()
+        PixelStyle.field.setFill()
+        PixelStyle.steppedPath(in: bounds.insetBy(dx: u, dy: u), step: u).fill()
+    }
+}
+
+class PixelTableRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionHighlightStyle != .none else { return }
+        if PixelStyle.isChrome {
+            PixelStyle.bubblegum.withAlphaComponent(0.22).setFill()
+        } else {
+            PixelStyle.blush.setFill()
+        }
+        bounds.fill()
+    }
+}
+
 class ThemeTileView: NSView {
     let themeFileName: String
     var onSelect: (() -> Void)?
-    var isSelected: Bool { didSet { needsDisplay = true } }
+    var isSelected: Bool {
+        didSet {
+            needsDisplay = true
+            if isSelected && !oldValue {
+                wiggle()
+            }
+        }
+    }
     private let previewView: AnimatedGIFView
 
     init(frame frameRect: NSRect, url: URL, isSelected: Bool) {
@@ -450,11 +1725,11 @@ class ThemeTileView: NSView {
         previewView.loadGIF(from: url)
 
         let nameLabel = NSTextField(labelWithString: ThemeManager.displayName(for: url))
-        nameLabel.font = NSFont.systemFont(ofSize: 11)
+        nameLabel.font = PixelStyle.font(9, weight: .semibold)
         nameLabel.alignment = .center
-        nameLabel.textColor = .labelColor
+        nameLabel.textColor = PixelStyle.isChrome ? PixelStyle.fieldText : PixelStyle.ink
         nameLabel.lineBreakMode = .byTruncatingTail
-        nameLabel.frame = NSRect(x: 2, y: 4, width: frameRect.width - 4, height: 16)
+        nameLabel.frame = NSRect(x: 2, y: 5, width: frameRect.width - 4, height: 14)
         addSubview(nameLabel)
     }
 
@@ -463,17 +1738,51 @@ class ThemeTileView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let rect = bounds.insetBy(dx: 2, dy: 2)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
-        if isSelected {
-            NSColor(calibratedRed: 1.0, green: 182 / 255, blue: 193 / 255, alpha: 0.22).setFill()
-            path.fill()
-            NSColor(calibratedRed: 1.0, green: 140 / 255, blue: 170 / 255, alpha: 1.0).setStroke()
-            path.lineWidth = 3
-        } else {
-            NSColor.separatorColor.setStroke()
-            path.lineWidth = 1
+        if PixelStyle.isChrome {
+            let path = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 8, yRadius: 8)
+            if isSelected {
+                NSGraphicsContext.saveGraphicsState()
+                let glow = NSShadow()
+                glow.shadowColor = PixelStyle.bubblegum.withAlphaComponent(0.9)
+                glow.shadowBlurRadius = 8
+                glow.shadowOffset = .zero
+                glow.set()
+                PixelStyle.bubblegum.withAlphaComponent(0.25).setFill()
+                path.fill()
+                NSGraphicsContext.restoreGraphicsState()
+                PixelStyle.bubblegum.setStroke()
+                path.lineWidth = 2
+                path.stroke()
+            } else {
+                NSColor.white.withAlphaComponent(0.06).setFill()
+                path.fill()
+                NSColor.white.withAlphaComponent(0.16).setStroke()
+                path.lineWidth = 1
+                path.stroke()
+            }
+            return
         }
-        path.stroke()
+        if isSelected {
+            PixelStyle.raspberry.setFill()
+            PixelStyle.steppedPath(in: rect, step: 2).fill()
+            PixelStyle.blush.setFill()
+            PixelStyle.steppedPath(in: rect.insetBy(dx: 3, dy: 3), step: 2).fill()
+        } else {
+            PixelStyle.blush.setFill()
+            PixelStyle.steppedPath(in: rect, step: 2).fill()
+            PixelStyle.cream.setFill()
+            PixelStyle.steppedPath(in: rect.insetBy(dx: 2, dy: 2), step: 2).fill()
+        }
+    }
+
+    private func wiggle() {
+        guard let layer = layer else { return }
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        layer.position = CGPoint(x: frame.midX, y: frame.midY)
+        let wiggle = CAKeyframeAnimation(keyPath: "transform.rotation.z")
+        wiggle.values = [0, 0.06, -0.06, 0.04, 0]
+        wiggle.duration = 0.3
+        layer.add(wiggle, forKey: "wiggle")
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -742,12 +2051,19 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     var tableView: NSTableView!
     var config: MaxwellConfig
     var onConfigChanged: (() -> Void)?
-    var speedSlider: NSSlider!
+    var speedSlider: PixelSlider!
     var speedLabel: NSTextField!
-    var showDoneBubblesCheckbox: NSButton!
-    var telegramEnabledCheckbox: NSButton!
+    var showDoneBubblesCheckbox: PixelCheckbox!
+    var telegramEnabledCheckbox: PixelCheckbox!
+    weak var anchorWindow: NSWindow?
 
-    private var sidebarTableView: NSTableView!
+    private var speedLCD: SevenSegmentView?
+    private var lcdStrip: LCDStripView?
+
+    private var stageView: NSView!
+    private var tabButtons: [PixelTabButton] = []
+    private var styleChips: [PixelTabButton] = []
+    private var saveButton: PixelButton!
     private var contentContainerView: NSView!
     private var sshContentView: NSView!
     private var othersContentView: NSView!
@@ -755,7 +2071,8 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     private var themeGridDocView: FlippedView!
     private var messageField: NSTextField!
     private var themeTiles: [ThemeTileView] = []
-    private let menuItems = ["SSH", "Others", "Theme"]
+    private var displayedStyle = MaxwellConfig.defaultSettingsStyle
+    private let tabs: [(icon: String, title: String)] = [("✦", "SSH"), ("★", "EXTRAS"), ("✿", "THEME")]
 
     override init() {
         config = MaxwellConfig.load()
@@ -763,162 +2080,313 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     }
 
     func show() {
+        config = MaxwellConfig.load()
+        PixelStyle.apply(styleId: config.settingsStyle)
         if window == nil {
             setupWindow()
+        } else if displayedStyle != config.settingsStyle {
+            installContent()
         }
-        config = MaxwellConfig.load()
+        refreshControls()
+        positionWindow()
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        animateAppear()
+    }
+
+    private func positionWindow() {
+        guard let w = window else { return }
+        guard let anchor = anchorWindow, let screen = anchor.screen ?? NSScreen.main else {
+            w.center()
+            return
+        }
+        let anchorFrame = anchor.frame
+        let visible = screen.visibleFrame
+        let size = w.frame.size
+        let body = PixelPanelView.bodyRect
+        let gap: CGFloat = 6
+
+        var x: CGFloat
+        if anchorFrame.midX > visible.midX {
+            x = anchorFrame.maxX - body.maxX
+        } else {
+            x = anchorFrame.minX - body.minX
+        }
+        x = max(visible.minX - body.minX, min(x, visible.maxX - body.maxX))
+
+        var y = anchorFrame.maxY + gap - body.minY
+        if y + size.height > visible.maxY + (size.height - body.maxY) {
+            y = anchorFrame.minY - gap - body.maxY - 40
+        }
+        y = max(visible.minY - body.minY, min(y, visible.maxY - size.height))
+
+        w.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    private func refreshControls() {
         tableView.reloadData()
         updateSpeedUI()
         updateDoneBubblesUI()
         updateTelegramUI()
+        updateStyleChips()
         messageField?.stringValue = config.clickMessage
         populateThemeGrid()
-        window?.center()
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func updateStyleChips() {
+        for (index, chip) in styleChips.enumerated() {
+            chip.isSelected = PixelStyle.styles[index].id == config.settingsStyle
+        }
+    }
+
+    @objc private func styleClicked(_ sender: PixelTabButton) {
+        let styleId = PixelStyle.styles[sender.tag].id
+        guard config.settingsStyle != styleId else { return }
+        config.settingsStyle = styleId
+        persist { $0.settingsStyle = styleId }
+        PixelStyle.apply(styleId: styleId)
+        installContent()
+        refreshControls()
+        selectTab(2, animated: false)
+        animateAppear()
+    }
+
+    private func animateAppear() {
+        guard let layer = stageView?.layer else { return }
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        layer.position = CGPoint(x: stageView.frame.midX, y: stageView.frame.midY)
+        let pop = CAKeyframeAnimation(keyPath: "transform.scale")
+        pop.values = [0.85, 1.04, 1.0]
+        pop.keyTimes = [0, 0.6, 1]
+        pop.duration = 0.3
+        pop.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut),
+            CAMediaTimingFunction(name: .easeInEaseOut)
+        ]
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 0.18
+        layer.add(pop, forKey: "pop")
+        layer.add(fade, forKey: "fade")
+    }
+
+    @objc private func closeWindow() {
+        window?.close()
+    }
+
+    @objc private func tabClicked(_ sender: PixelTabButton) {
+        selectTab(sender.tag, animated: true)
+    }
+
+    private func selectTab(_ index: Int, animated: Bool) {
+        for (i, tab) in tabButtons.enumerated() {
+            tab.isSelected = i == index
+        }
+        lcdStrip?.text = "▶ \(tabs[index].title)"
+        let panes = [sshContentView, othersContentView, themeContentView]
+        for (i, pane) in panes.enumerated() {
+            pane?.isHidden = i != index
+        }
+        guard animated, let shown = panes[index] else { return }
+        let target = shown.frame.origin
+        shown.alphaValue = 0
+        shown.setFrameOrigin(NSPoint(x: target.x + 12, y: target.y))
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            shown.animator().alphaValue = 1
+            shown.animator().setFrameOrigin(target)
+        }
     }
 
     private func setupWindow() {
-        let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 550, height: 400),
-            styleMask: [.titled, .closable],
+        let contentSize = NSSize(width: 622, height: 524)
+        let w = KeyableWindow(
+            contentRect: NSRect(origin: .zero, size: contentSize),
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
-        w.title = "Maxwell Settings"
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.hasShadow = false
         w.isReleasedWhenClosed = false
+        window = w
+        installContent()
+    }
 
-        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 550, height: 400))
+    private func installContent() {
+        guard let w = window else { return }
+        displayedStyle = config.settingsStyle
+        tabButtons = []
+        styleChips = []
+        themeTiles = []
 
-        let sidebarWidth: CGFloat = 120
-        let sidebarView = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: sidebarWidth, height: 400))
-        sidebarView.material = .sidebar
-        sidebarView.blendingMode = .behindWindow
-        contentView.addSubview(sidebarView)
+        let root = NSView(frame: NSRect(origin: .zero, size: w.frame.size))
+        stageView = NSView(frame: root.bounds)
+        stageView.wantsLayer = true
+        root.addSubview(stageView)
 
-        let sidebarScrollView = NSScrollView(frame: NSRect(x: 0, y: 50, width: sidebarWidth, height: 350))
-        sidebarScrollView.drawsBackground = false
-        sidebarTableView = NSTableView(frame: sidebarScrollView.bounds)
-        sidebarTableView.dataSource = self
-        sidebarTableView.delegate = self
-        sidebarTableView.rowHeight = 32
-        sidebarTableView.backgroundColor = .clear
-        sidebarTableView.headerView = nil
-        sidebarTableView.style = .sourceList
+        let panel = PixelPanelView(frame: root.bounds)
+        stageView.addSubview(panel)
 
-        let sidebarCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("sidebar"))
-        sidebarCol.width = sidebarWidth - 4
-        sidebarTableView.addTableColumn(sidebarCol)
+        let body = PixelPanelView.bodyRect
+        let headerHeight = PixelPanelView.headerHeight
 
-        sidebarScrollView.documentView = sidebarTableView
-        sidebarScrollView.hasVerticalScroller = false
-        sidebarView.addSubview(sidebarScrollView)
+        if PixelStyle.isChrome {
+            lcdStrip = nil
+            let strip = LCDStripView(frame: NSRect(x: body.minX + 218, y: body.maxY - headerHeight + 15, width: 290, height: 38))
+            strip.showsEQ = true
+            strip.text = "▶ \(tabs[0].title)"
+            lcdStrip = strip
+            panel.addSubview(strip)
 
-        contentContainerView = NSView(frame: NSRect(x: sidebarWidth, y: 0, width: 550 - sidebarWidth, height: 400))
-        contentView.addSubview(contentContainerView)
+            let closeButton = PixelButton(title: "✕", frame: NSRect(x: body.maxX - 62, y: body.maxY - headerHeight / 2 - 16, width: 32, height: 32))
+            closeButton.faceColor = PixelStyle.blush
+            closeButton.titleColor = PixelStyle.ink
+            closeButton.target = self
+            closeButton.action = #selector(closeWindow)
+            panel.addSubview(closeButton)
+        } else {
+            lcdStrip = nil
+            let title = NSTextField(labelWithString: "")
+            title.attributedStringValue = NSAttributedString(
+                string: "♥ MAXWELL SETTINGS",
+                attributes: [
+                    .font: PixelStyle.font(13),
+                    .foregroundColor: PixelStyle.ink,
+                    .kern: 2.5
+                ])
+            title.sizeToFit()
+            title.setFrameOrigin(NSPoint(x: body.minX + 22, y: body.maxY - headerHeight / 2 - title.frame.height / 2))
+            panel.addSubview(title)
+
+            let closeButton = PixelButton(title: "✕", frame: NSRect(x: body.maxX - 46, y: body.maxY - headerHeight / 2 - 14, width: 30, height: 28))
+            closeButton.faceColor = PixelStyle.blush
+            closeButton.titleColor = PixelStyle.ink
+            closeButton.target = self
+            closeButton.action = #selector(closeWindow)
+            panel.addSubview(closeButton)
+        }
+
+        let tabItems: [(icon: String, title: String)] = PixelStyle.isChrome
+            ? [("⇄", "SSH"), ("♪", "EXTRAS"), ("◈", "THEME")]
+            : tabs
+        for (index, item) in tabItems.enumerated() {
+            let y = body.maxY - headerHeight - 46 - CGFloat(index) * 38
+            let tab = PixelTabButton(icon: item.icon, title: item.title, frame: NSRect(x: body.minX + 16, y: y, width: 120, height: 30))
+            tab.tag = index
+            tab.target = self
+            tab.action = #selector(tabClicked(_:))
+            panel.addSubview(tab)
+            tabButtons.append(tab)
+        }
+
+        contentContainerView = NSView(frame: NSRect(x: body.minX + 152, y: body.minY + 62, width: body.width - 152 - 16, height: body.height - headerHeight - 62 - 12))
+        panel.addSubview(contentContainerView)
 
         setupSSHContent()
         setupOthersContent()
         setupThemeContent()
 
-        sshContentView.isHidden = false
-        othersContentView.isHidden = true
-        themeContentView.isHidden = true
-
-        let saveButton = NSButton(frame: NSRect(x: 550 - 110, y: 10, width: 100, height: 30))
-        saveButton.title = "Save"
-        saveButton.bezelStyle = .rounded
+        let saveMargin: CGFloat = PixelStyle.isChrome ? 34 : 16
+        saveButton = PixelButton(title: "SAVE ♥", frame: NSRect(x: body.maxX - saveMargin - 122, y: body.minY + 14, width: 122, height: 36))
+        saveButton.fontSize = 12
         saveButton.target = self
         saveButton.action = #selector(saveConfig)
-        contentView.addSubview(saveButton)
+        panel.addSubview(saveButton)
 
-        w.contentView = contentView
-        window = w
+        let sparkles = SparkleField(frame: root.bounds)
+        stageView.addSubview(sparkles)
 
-        sidebarTableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        w.contentView = root
+
+        selectTab(0, animated: false)
     }
 
     private func setupSSHContent() {
         sshContentView = NSView(frame: contentContainerView.bounds)
         contentContainerView.addSubview(sshContentView)
+        let size = sshContentView.bounds.size
 
-        let label = NSTextField(labelWithString: "Remote SSH Servers")
-        label.font = NSFont.boldSystemFont(ofSize: 14)
-        label.frame = NSRect(x: 20, y: 355, width: 200, height: 20)
-        sshContentView.addSubview(label)
+        let caption = PixelStyle.caption("✦ REMOTE SSH SERVERS")
+        caption.setFrameOrigin(NSPoint(x: 0, y: size.height - caption.frame.height - 2))
+        sshContentView.addSubview(caption)
 
-        let scrollView = NSScrollView(frame: NSRect(x: 20, y: 100, width: 390, height: 245))
+        let columns: [(id: String, title: String, width: CGFloat)] = [
+            ("name", "NAME", 56),
+            ("host", "HOST", 104),
+            ("user", "USER", 76),
+            ("keyPath", "KEY", 102),
+            ("enabled", "ON", 26)
+        ]
+
+        var headerX: CGFloat = 10
+        for column in columns {
+            let header = PixelStyle.label(column.title, size: 9, color: PixelStyle.raspberry.withAlphaComponent(0.75))
+            header.sizeToFit()
+            header.setFrameOrigin(NSPoint(x: headerX, y: size.height - 42))
+            sshContentView.addSubview(header)
+            headerX += column.width + 4
+        }
+
+        let box = PixelBox(frame: NSRect(x: 0, y: 52, width: size.width, height: size.height - 100))
+        sshContentView.addSubview(box)
+
+        let scrollView = NSScrollView(frame: box.bounds.insetBy(dx: 6, dy: 6))
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
         tableView = NSTableView(frame: scrollView.bounds)
         tableView.dataSource = self
         tableView.delegate = self
-        tableView.rowHeight = 24
+        tableView.rowHeight = 26
+        tableView.backgroundColor = .clear
+        tableView.headerView = nil
+        tableView.intercellSpacing = NSSize(width: 4, height: 4)
 
-        let nameCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
-        nameCol.title = "Name"
-        nameCol.width = 70
-        tableView.addTableColumn(nameCol)
-
-        let hostCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("host"))
-        hostCol.title = "Host"
-        hostCol.width = 100
-        tableView.addTableColumn(hostCol)
-
-        let userCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("user"))
-        userCol.title = "User"
-        userCol.width = 70
-        tableView.addTableColumn(userCol)
-
-        let keyCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("keyPath"))
-        keyCol.title = "SSH Key Path"
-        keyCol.width = 110
-        tableView.addTableColumn(keyCol)
-
-        let enabledCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("enabled"))
-        enabledCol.title = "On"
-        enabledCol.width = 30
-        tableView.addTableColumn(enabledCol)
+        for column in columns {
+            let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(column.id))
+            col.width = column.width
+            tableView.addTableColumn(col)
+        }
 
         scrollView.documentView = tableView
-        scrollView.hasVerticalScroller = true
-        sshContentView.addSubview(scrollView)
+        box.addSubview(scrollView)
 
-        let addButton = NSButton(frame: NSRect(x: 20, y: 60, width: 80, height: 30))
-        addButton.title = "Add"
-        addButton.bezelStyle = .rounded
-        addButton.target = self
-        addButton.action = #selector(addRemote)
-        sshContentView.addSubview(addButton)
-
-        let removeButton = NSButton(frame: NSRect(x: 110, y: 60, width: 80, height: 30))
-        removeButton.title = "Remove"
-        removeButton.bezelStyle = .rounded
-        removeButton.target = self
-        removeButton.action = #selector(removeRemote)
-        sshContentView.addSubview(removeButton)
-
-        let testButton = NSButton(frame: NSRect(x: 200, y: 60, width: 80, height: 30))
-        testButton.title = "Test"
-        testButton.bezelStyle = .rounded
-        testButton.target = self
-        testButton.action = #selector(testSSH)
-        sshContentView.addSubview(testButton)
+        let buttons: [(String, Selector)] = [
+            ("ADD", #selector(addRemote)),
+            ("REMOVE", #selector(removeRemote)),
+            ("TEST", #selector(testSSH))
+        ]
+        var buttonX: CGFloat = 0
+        for (buttonTitle, action) in buttons {
+            let button = PixelButton(title: buttonTitle, frame: NSRect(x: buttonX, y: 8, width: 92, height: 30))
+            button.faceColor = PixelStyle.blush
+            button.titleColor = PixelStyle.ink
+            button.target = self
+            button.action = action
+            sshContentView.addSubview(button)
+            buttonX += 100
+        }
     }
 
     private func setupOthersContent() {
         othersContentView = NSView(frame: contentContainerView.bounds)
         contentContainerView.addSubview(othersContentView)
+        let size = othersContentView.bounds.size
 
-        let label = NSTextField(labelWithString: "Animation")
-        label.font = NSFont.boldSystemFont(ofSize: 14)
-        label.frame = NSRect(x: 20, y: 355, width: 200, height: 20)
-        othersContentView.addSubview(label)
+        let animCaption = PixelStyle.caption("★ ANIMATION")
+        animCaption.setFrameOrigin(NSPoint(x: 0, y: size.height - animCaption.frame.height - 2))
+        othersContentView.addSubview(animCaption)
 
-        let speedTitleLabel = NSTextField(labelWithString: "GIF Speed:")
-        speedTitleLabel.font = NSFont.systemFont(ofSize: 13)
-        speedTitleLabel.frame = NSRect(x: 20, y: 310, width: 80, height: 20)
-        othersContentView.addSubview(speedTitleLabel)
+        let speedTitle = PixelStyle.label("SPEED", size: 11, color: PixelStyle.ink)
+        speedTitle.sizeToFit()
+        speedTitle.setFrameOrigin(NSPoint(x: 0, y: size.height - 56))
+        othersContentView.addSubview(speedTitle)
 
-        speedSlider = NSSlider(frame: NSRect(x: 100, y: 310, width: 200, height: 20))
+        speedSlider = PixelSlider(frame: NSRect(x: 64, y: size.height - 62, width: 210, height: 26))
         speedSlider.minValue = 0.25
         speedSlider.maxValue = 3.0
         speedSlider.doubleValue = config.gifSpeed
@@ -926,80 +2394,105 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         speedSlider.action = #selector(speedSliderChanged(_:))
         othersContentView.addSubview(speedSlider)
 
-        speedLabel = NSTextField(labelWithString: formatSpeed(config.gifSpeed))
-        speedLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
-        speedLabel.frame = NSRect(x: 310, y: 310, width: 60, height: 20)
-        othersContentView.addSubview(speedLabel)
+        if PixelStyle.isChrome {
+            speedLabel = nil
+            let lcd = SevenSegmentView(frame: NSRect(x: 286, y: size.height - 66, width: 88, height: 32))
+            lcd.text = formatSpeed(config.gifSpeed)
+            speedLCD = lcd
+            othersContentView.addSubview(lcd)
+        } else {
+            speedLCD = nil
+            speedLabel = NSTextField(labelWithString: formatSpeed(config.gifSpeed))
+            speedLabel.font = PixelStyle.font(12)
+            speedLabel.textColor = PixelStyle.raspberry
+            speedLabel.frame = NSRect(x: 286, y: size.height - 58, width: 70, height: 18)
+            othersContentView.addSubview(speedLabel)
+        }
 
-        let slowLabel = NSTextField(labelWithString: "Slow")
-        slowLabel.font = NSFont.systemFont(ofSize: 10)
-        slowLabel.textColor = .secondaryLabelColor
-        slowLabel.frame = NSRect(x: 100, y: 290, width: 40, height: 14)
+        let slowLabel = PixelStyle.label("SLOW", size: 9, color: PixelStyle.raspberry.withAlphaComponent(0.75))
+        slowLabel.sizeToFit()
+        slowLabel.setFrameOrigin(NSPoint(x: 64, y: size.height - 80))
         othersContentView.addSubview(slowLabel)
 
-        let fastLabel = NSTextField(labelWithString: "Fast")
-        fastLabel.font = NSFont.systemFont(ofSize: 10)
-        fastLabel.textColor = .secondaryLabelColor
-        fastLabel.frame = NSRect(x: 270, y: 290, width: 30, height: 14)
+        let fastLabel = PixelStyle.label("FAST", size: 9, color: PixelStyle.raspberry.withAlphaComponent(0.75))
+        fastLabel.sizeToFit()
+        fastLabel.setFrameOrigin(NSPoint(x: 246, y: size.height - 80))
         othersContentView.addSubview(fastLabel)
 
-        let resetButton = NSButton(frame: NSRect(x: 20, y: 250, width: 100, height: 24))
-        resetButton.title = "Reset to 1x"
-        resetButton.bezelStyle = .rounded
+        let resetButton = PixelButton(title: "RESET 1×", frame: NSRect(x: 0, y: size.height - 124, width: 112, height: 30))
+        resetButton.faceColor = PixelStyle.blush
+        resetButton.titleColor = PixelStyle.ink
         resetButton.target = self
         resetButton.action = #selector(resetSpeed)
         othersContentView.addSubview(resetButton)
 
-        let notificationsLabel = NSTextField(labelWithString: "Notifications")
-        notificationsLabel.font = NSFont.boldSystemFont(ofSize: 14)
-        notificationsLabel.frame = NSRect(x: 20, y: 200, width: 200, height: 20)
-        othersContentView.addSubview(notificationsLabel)
+        let notifCaption = PixelStyle.caption("★ NOTIFICATIONS")
+        notifCaption.setFrameOrigin(NSPoint(x: 0, y: size.height - 158 - notifCaption.frame.height))
+        othersContentView.addSubview(notifCaption)
 
-        showDoneBubblesCheckbox = NSButton(checkboxWithTitle: "Show done bubbles", target: self, action: #selector(doneBubblesChanged(_:)))
-        showDoneBubblesCheckbox.frame = NSRect(x: 20, y: 170, width: 200, height: 20)
-        showDoneBubblesCheckbox.state = config.showDoneBubbles ? .on : .off
+        showDoneBubblesCheckbox = PixelCheckbox(title: "SHOW DONE BUBBLES", frame: NSRect(x: 0, y: size.height - 210, width: 320, height: 22))
+        showDoneBubblesCheckbox.isChecked = config.showDoneBubbles
+        showDoneBubblesCheckbox.target = self
+        showDoneBubblesCheckbox.action = #selector(doneBubblesChanged(_:))
         othersContentView.addSubview(showDoneBubblesCheckbox)
 
-        telegramEnabledCheckbox = NSButton(checkboxWithTitle: "Telegram notifications", target: self, action: #selector(telegramEnabledChanged(_:)))
-        telegramEnabledCheckbox.frame = NSRect(x: 20, y: 145, width: 200, height: 20)
-        telegramEnabledCheckbox.state = config.telegramEnabled ? .on : .off
+        telegramEnabledCheckbox = PixelCheckbox(title: "TELEGRAM NOTIFICATIONS", frame: NSRect(x: 0, y: size.height - 240, width: 320, height: 22))
+        telegramEnabledCheckbox.isChecked = config.telegramEnabled
+        telegramEnabledCheckbox.target = self
+        telegramEnabledCheckbox.action = #selector(telegramEnabledChanged(_:))
         othersContentView.addSubview(telegramEnabledCheckbox)
     }
 
     private func setupThemeContent() {
         themeContentView = NSView(frame: contentContainerView.bounds)
         contentContainerView.addSubview(themeContentView)
+        let size = themeContentView.bounds.size
 
-        let title = NSTextField(labelWithString: "Theme")
-        title.font = NSFont.boldSystemFont(ofSize: 14)
-        title.frame = NSRect(x: 20, y: 370, width: 200, height: 20)
-        themeContentView.addSubview(title)
-
-        let msgLabel = NSTextField(labelWithString: "Message on click:")
-        msgLabel.font = NSFont.systemFont(ofSize: 13)
-        msgLabel.frame = NSRect(x: 20, y: 338, width: 130, height: 20)
+        let msgLabel = PixelStyle.label("MESSAGE ON CLICK", size: 11, color: PixelStyle.ink)
+        msgLabel.sizeToFit()
+        msgLabel.setFrameOrigin(NSPoint(x: 0, y: size.height - 20))
         themeContentView.addSubview(msgLabel)
 
-        messageField = NSTextField(frame: NSRect(x: 150, y: 335, width: 240, height: 24))
+        messageField = NSTextField(frame: NSRect(x: 158, y: size.height - 26, width: size.width - 158, height: 26))
         messageField.stringValue = config.clickMessage
         messageField.placeholderString = MaxwellConfig.defaultClickMessage
         messageField.identifier = NSUserInterfaceItemIdentifier("clickMessage")
         messageField.delegate = self
+        PixelStyle.styleField(messageField)
         themeContentView.addSubview(messageField)
 
-        let hint = NSTextField(labelWithString: "Drop .gif files into ~/.maxwell/gifs to add more themes")
-        hint.font = NSFont.systemFont(ofSize: 10)
-        hint.textColor = .secondaryLabelColor
-        hint.frame = NSRect(x: 20, y: 312, width: 390, height: 14)
+        let styleLabel = PixelStyle.label("WINDOW STYLE", size: 11, color: PixelStyle.ink)
+        styleLabel.sizeToFit()
+        styleLabel.setFrameOrigin(NSPoint(x: 0, y: size.height - 58))
+        themeContentView.addSubview(styleLabel)
+
+        for (index, style) in PixelStyle.styles.enumerated() {
+            let chip = PixelTabButton(icon: style.icon, title: style.title, frame: NSRect(x: 158 + CGFloat(index) * 94, y: size.height - 64, width: 90, height: 26))
+            chip.tag = index
+            chip.fontSize = 10
+            chip.centersTitle = true
+            chip.isSelected = style.id == config.settingsStyle
+            chip.target = self
+            chip.action = #selector(styleClicked(_:))
+            themeContentView.addSubview(chip)
+            styleChips.append(chip)
+        }
+
+        let hint = PixelStyle.label("Drop .gif files into ~/.maxwell/gifs to add more", size: 9, color: PixelStyle.raspberry.withAlphaComponent(0.75), weight: .medium)
+        hint.sizeToFit()
+        hint.setFrameOrigin(NSPoint(x: 0, y: size.height - 86))
         themeContentView.addSubview(hint)
 
-        let scrollView = NSScrollView(frame: NSRect(x: 20, y: 15, width: 390, height: 290))
+        let box = PixelBox(frame: NSRect(x: 0, y: 0, width: size.width, height: size.height - 98))
+        themeContentView.addSubview(box)
+
+        let scrollView = NSScrollView(frame: box.bounds.insetBy(dx: 6, dy: 6))
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
-        themeGridDocView = FlippedView(frame: NSRect(x: 0, y: 0, width: 372, height: 290))
+        themeGridDocView = FlippedView(frame: NSRect(x: 0, y: 0, width: scrollView.frame.width - 16, height: scrollView.frame.height))
         scrollView.documentView = themeGridDocView
-        themeContentView.addSubview(scrollView)
+        box.addSubview(scrollView)
 
         populateThemeGrid()
     }
@@ -1011,13 +2504,15 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
 
         let themes = ThemeManager.availableThemes()
         let columns = 3
-        let tileW: CGFloat = 116
+        let tileW: CGFloat = 124
         let tileH: CGFloat = 96
-        let hGap: CGFloat = 6
-        let vGap: CGFloat = 10
+        let hGap: CGFloat = 8
+        let vGap: CGFloat = 8
         let rows = (themes.count + columns - 1) / columns
-        let docHeight = max(290, CGFloat(rows) * (tileH + vGap) + vGap)
-        themeGridDocView.frame = NSRect(x: 0, y: 0, width: 372, height: docHeight)
+        let docWidth = themeGridDocView.frame.width
+        let minHeight = themeGridDocView.superview?.frame.height ?? 0
+        let docHeight = max(minHeight, CGFloat(rows) * (tileH + vGap) + vGap)
+        themeGridDocView.frame = NSRect(x: 0, y: 0, width: docWidth, height: docHeight)
 
         for (index, url) in themes.enumerated() {
             let col = index % columns
@@ -1039,6 +2534,14 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         for tile in themeTiles {
             tile.isSelected = tile.themeFileName == fileName
         }
+        persist { $0.theme = fileName }
+        onConfigChanged?()
+    }
+
+    private func persist(_ mutate: (inout MaxwellConfig) -> Void) {
+        var stored = MaxwellConfig.load()
+        mutate(&stored)
+        stored.save()
     }
 
     private func formatSpeed(_ speed: Double) -> String {
@@ -1048,11 +2551,13 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     private func updateSpeedUI() {
         speedSlider?.doubleValue = config.gifSpeed
         speedLabel?.stringValue = formatSpeed(config.gifSpeed)
+        speedLCD?.text = formatSpeed(config.gifSpeed)
     }
 
     @objc private func speedSliderChanged(_ sender: NSSlider) {
         config.gifSpeed = sender.doubleValue
-        speedLabel.stringValue = formatSpeed(config.gifSpeed)
+        speedLabel?.stringValue = formatSpeed(config.gifSpeed)
+        speedLCD?.text = formatSpeed(config.gifSpeed)
     }
 
     @objc private func resetSpeed() {
@@ -1061,60 +2566,45 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     }
 
     private func updateDoneBubblesUI() {
-        showDoneBubblesCheckbox?.state = config.showDoneBubbles ? .on : .off
+        showDoneBubblesCheckbox?.isChecked = config.showDoneBubbles
     }
 
     private func updateTelegramUI() {
-        telegramEnabledCheckbox?.state = config.telegramEnabled ? .on : .off
+        telegramEnabledCheckbox?.isChecked = config.telegramEnabled
     }
 
-    @objc private func doneBubblesChanged(_ sender: NSButton) {
-        config.showDoneBubbles = sender.state == .on
+    @objc private func doneBubblesChanged(_ sender: PixelCheckbox) {
+        config.showDoneBubbles = sender.isChecked
     }
 
-    @objc private func telegramEnabledChanged(_ sender: NSButton) {
-        config.telegramEnabled = sender.state == .on
+    @objc private func telegramEnabledChanged(_ sender: PixelCheckbox) {
+        config.telegramEnabled = sender.isChecked
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        if tableView == sidebarTableView {
-            return menuItems.count
-        }
         return config.remotes.count
     }
 
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        if tableView == sidebarTableView {
-            let cellId = NSUserInterfaceItemIdentifier("SidebarCell")
-            var cell = tableView.makeView(withIdentifier: cellId, owner: self) as? NSTableCellView
-            if cell == nil {
-                cell = NSTableCellView(frame: NSRect(x: 0, y: 0, width: 116, height: 32))
-                cell?.identifier = cellId
-                let textField = NSTextField(labelWithString: "")
-                textField.frame = NSRect(x: 8, y: 6, width: 100, height: 20)
-                textField.font = NSFont.systemFont(ofSize: 13)
-                cell?.addSubview(textField)
-                cell?.textField = textField
-            }
-            cell?.textField?.stringValue = menuItems[row]
-            return cell
-        }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        return PixelTableRowView()
+    }
 
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard row < config.remotes.count else { return nil }
         let remote = config.remotes[row]
         let identifier = tableColumn?.identifier.rawValue ?? ""
 
         if identifier == "enabled" {
-            let checkbox = NSButton(checkboxWithTitle: "", target: self, action: #selector(toggleEnabled(_:)))
-            checkbox.state = remote.enabled ? .on : .off
+            let checkbox = PixelCheckbox(title: "", frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+            checkbox.isChecked = remote.enabled
             checkbox.tag = row
+            checkbox.target = self
+            checkbox.action = #selector(toggleEnabled(_:))
             return checkbox
         }
 
         let textField = NSTextField()
-        textField.isBordered = true
-        textField.bezelStyle = .squareBezel
-        textField.isEditable = true
+        PixelStyle.styleField(textField, size: 10)
         textField.delegate = self
         textField.tag = row
 
@@ -1130,18 +2620,10 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         return textField
     }
 
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        guard let tableView = notification.object as? NSTableView, tableView == sidebarTableView else { return }
-        let selectedRow = tableView.selectedRow
-        sshContentView.isHidden = selectedRow != 0
-        othersContentView.isHidden = selectedRow != 1
-        themeContentView.isHidden = selectedRow != 2
-    }
-
-    @objc private func toggleEnabled(_ sender: NSButton) {
+    @objc private func toggleEnabled(_ sender: PixelCheckbox) {
         let row = sender.tag
         if row < config.remotes.count {
-            config.remotes[row].enabled = sender.state == .on
+            config.remotes[row].enabled = sender.isChecked
         }
     }
 
@@ -1227,7 +2709,10 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
         config.save()
         onConfigChanged?()
-        window?.close()
+        saveButton?.title = "SAVED ♥"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            self?.saveButton?.title = "SAVE ♥"
+        }
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
@@ -1890,6 +3375,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = containerView
         restoreWindowFrame()
         window.makeKeyAndOrderFront(nil)
+        settingsController.anchorWindow = window
 
         telegramNotifier = TelegramNotifier()
         telegramNotifier.start()
@@ -1914,6 +3400,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         containerView.onBubbleClick = { [weak self] session in
             self?.switchToApp(for: session)
+        }
+
+        if CommandLine.arguments.contains("--settings") {
+            settingsController.show()
         }
     }
 
