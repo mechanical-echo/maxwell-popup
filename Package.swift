@@ -10,7 +10,8 @@ let package = Package(
         .executableTarget(
             name: "maxwell-popup",
             resources: [
-                .copy("Resources/Maxwell.gif")
+                .copy("Resources/Maxwell.gif"),
+                .copy("Resources/Maxwell_pixel.gif")
             ]
         )
     ]

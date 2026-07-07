@@ -45,6 +45,8 @@ class AnimatedGIFView: NSView {
     private var frameTimer: Timer?
     private var imageLayer: CALayer!
 
+    var draggable: Bool = true
+
     var speed: Double = 1.0 {
         didSet {
             if speed != oldValue {
@@ -79,6 +81,8 @@ class AnimatedGIFView: NSView {
     func loadGIF(from url: URL) {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return }
         let count = CGImageSourceGetCount(source)
+        stopAnimation()
+        currentFrameIndex = 0
         frames.removeAll()
 
         for i in 0..<count {
@@ -118,9 +122,11 @@ class AnimatedGIFView: NSView {
     private func scheduleNextFrame() {
         guard !frames.isEmpty else { return }
         let duration = frames[currentFrameIndex].duration / speed
-        frameTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: duration, repeats: false) { [weak self] _ in
             self?.advanceFrame()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        frameTimer = timer
     }
 
     private func advanceFrame() {
@@ -148,7 +154,7 @@ class AnimatedGIFView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let window = self.window else { return }
+        guard draggable, let window = self.window else { return }
         let currentLocation = event.locationInWindow
         let deltaX = currentLocation.x - initialMouseLocation.x
         let deltaY = currentLocation.y - initialMouseLocation.y
@@ -320,19 +326,46 @@ struct SessionInfo {
     var sessionId: String
     var isRemote: Bool
     var remoteName: String?
+    var tmuxSession: String?
 }
 
 struct MaxwellConfig: Codable {
     var remotes: [RemoteConfig]
     var gifSpeed: Double
     var showDoneBubbles: Bool
+    var telegramEnabled: Bool
+    var theme: String
+    var clickMessage: String
 
     static let configPath = NSString(string: "~/.maxwell/config.json").expandingTildeInPath
+    static let telegramToken = "***REMOVED***"
+    static let telegramChatId = "***REMOVED***"
+    static let defaultTheme = "Maxwell.gif"
+    static let defaultClickMessage = "meow"
 
-    init(remotes: [RemoteConfig] = [], gifSpeed: Double = 1.0, showDoneBubbles: Bool = false) {
+    init(remotes: [RemoteConfig] = [], gifSpeed: Double = 1.0, showDoneBubbles: Bool = false,
+         telegramEnabled: Bool = false, theme: String = MaxwellConfig.defaultTheme,
+         clickMessage: String = MaxwellConfig.defaultClickMessage) {
         self.remotes = remotes
         self.gifSpeed = gifSpeed
         self.showDoneBubbles = showDoneBubbles
+        self.telegramEnabled = telegramEnabled
+        self.theme = theme
+        self.clickMessage = clickMessage
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case remotes, gifSpeed, showDoneBubbles, telegramEnabled, theme, clickMessage
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        remotes = (try? c.decode([RemoteConfig].self, forKey: .remotes)) ?? []
+        gifSpeed = (try? c.decode(Double.self, forKey: .gifSpeed)) ?? 1.0
+        showDoneBubbles = (try? c.decode(Bool.self, forKey: .showDoneBubbles)) ?? false
+        telegramEnabled = (try? c.decode(Bool.self, forKey: .telegramEnabled)) ?? false
+        theme = (try? c.decode(String.self, forKey: .theme)) ?? MaxwellConfig.defaultTheme
+        clickMessage = (try? c.decode(String.self, forKey: .clickMessage)) ?? MaxwellConfig.defaultClickMessage
     }
 
     static func load() -> MaxwellConfig {
@@ -352,6 +385,358 @@ struct MaxwellConfig: Codable {
     }
 }
 
+enum ThemeManager {
+    static let gifsDirectory = NSString(string: "~/.maxwell/gifs").expandingTildeInPath
+    static let bundledGifs = ["Maxwell", "Maxwell_pixel"]
+
+    static func seedIfNeeded() {
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: gifsDirectory, withIntermediateDirectories: true)
+        for name in bundledGifs {
+            let dest = (gifsDirectory as NSString).appendingPathComponent("\(name).gif")
+            guard !fm.fileExists(atPath: dest),
+                  let src = Bundle.module.url(forResource: name, withExtension: "gif") else { continue }
+            try? fm.copyItem(at: src, to: URL(fileURLWithPath: dest))
+        }
+    }
+
+    static func availableThemes() -> [URL] {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(
+            at: URL(fileURLWithPath: gifsDirectory),
+            includingPropertiesForKeys: nil) else { return [] }
+        return items
+            .filter { $0.pathExtension.lowercased() == "gif" }
+            .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+    }
+
+    static func gifURL(for theme: String) -> URL? {
+        let path = (gifsDirectory as NSString).appendingPathComponent(theme)
+        if FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        let base = (theme as NSString).deletingPathExtension
+        return Bundle.module.url(forResource: base.isEmpty ? "Maxwell" : base, withExtension: "gif")
+            ?? Bundle.module.url(forResource: "Maxwell", withExtension: "gif")
+    }
+
+    static func displayName(for url: URL) -> String {
+        return (url.lastPathComponent as NSString).deletingPathExtension
+    }
+}
+
+class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+class ThemeTileView: NSView {
+    let themeFileName: String
+    var onSelect: (() -> Void)?
+    var isSelected: Bool { didSet { needsDisplay = true } }
+    private let previewView: AnimatedGIFView
+
+    init(frame frameRect: NSRect, url: URL, isSelected: Bool) {
+        self.themeFileName = url.lastPathComponent
+        self.isSelected = isSelected
+        self.previewView = AnimatedGIFView(
+            frame: NSRect(x: 8, y: 24, width: frameRect.width - 16, height: frameRect.height - 32))
+        super.init(frame: frameRect)
+        wantsLayer = true
+
+        previewView.draggable = false
+        previewView.speed = 1.0
+        previewView.onClick = { [weak self] in self?.onSelect?() }
+        addSubview(previewView)
+        previewView.loadGIF(from: url)
+
+        let nameLabel = NSTextField(labelWithString: ThemeManager.displayName(for: url))
+        nameLabel.font = NSFont.systemFont(ofSize: 11)
+        nameLabel.alignment = .center
+        nameLabel.textColor = .labelColor
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.frame = NSRect(x: 2, y: 4, width: frameRect.width - 4, height: 16)
+        addSubview(nameLabel)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let rect = bounds.insetBy(dx: 2, dy: 2)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        if isSelected {
+            NSColor(calibratedRed: 1.0, green: 182 / 255, blue: 193 / 255, alpha: 0.22).setFill()
+            path.fill()
+            NSColor(calibratedRed: 1.0, green: 140 / 255, blue: 170 / 255, alpha: 1.0).setStroke()
+            path.lineWidth = 3
+        } else {
+            NSColor.separatorColor.setStroke()
+            path.lineWidth = 1
+        }
+        path.stroke()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onSelect?()
+    }
+}
+
+struct PendingTelegramAction {
+    var session: SessionInfo
+    var remoteConfig: RemoteConfig?
+    var messageId: Int?
+}
+
+class TelegramNotifier {
+    private var lastNotifiedMessages: Set<String> = []
+    private var lastNotificationTime: Date = .distantPast
+    private let minInterval: TimeInterval = 5
+    private var pendingActions: [String: PendingTelegramAction] = [:]
+    private var pollTimer: Timer?
+    private var lastUpdateId: Int = 0
+
+    func start() {
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.pollUpdates()
+        }
+    }
+
+    func stop() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+    }
+
+    func sendWaitingNotification(sessions: [SessionInfo], remotes: [RemoteConfig]) {
+        let config = MaxwellConfig.load()
+        guard config.telegramEnabled else { return }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastNotificationTime) >= minInterval else { return }
+
+        let currentMessages = Set(sessions.map { $0.message })
+        let newMessages = currentMessages.subtracting(lastNotifiedMessages)
+        guard !newMessages.isEmpty else { return }
+
+        lastNotifiedMessages = currentMessages
+        lastNotificationTime = now
+
+        for session in sessions where newMessages.contains(session.message) {
+            let remoteConfig = remotes.first { $0.name == session.remoteName }
+            let canAccept = session.isRemote && session.tmuxSession != nil && !session.tmuxSession!.isEmpty && remoteConfig != nil
+            send(session: session, remoteConfig: remoteConfig, canAccept: canAccept)
+        }
+    }
+
+    func clearNotifiedMessages() {
+        lastNotifiedMessages.removeAll()
+        pendingActions.removeAll()
+    }
+
+    private func send(session: SessionInfo, remoteConfig: RemoteConfig?, canAccept: Bool) {
+        let urlString = "https://api.telegram.org/bot\(MaxwellConfig.telegramToken)/sendMessage"
+        guard let url = URL(string: urlString) else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let text = "⚠️ Claude waiting\n\n\(session.message)"
+        let callbackId = UUID().uuidString.prefix(8).lowercased()
+
+        var body: [String: Any] = [
+            "chat_id": MaxwellConfig.telegramChatId,
+            "text": text
+        ]
+
+        if canAccept {
+            let keyboard: [String: Any] = [
+                "inline_keyboard": [[
+                    ["text": "✅ Accept", "callback_data": "accept_\(callbackId)"],
+                    ["text": "❌ Reject", "callback_data": "reject_\(callbackId)"]
+                ]]
+            ]
+            body["reply_markup"] = keyboard
+
+            pendingActions[String(callbackId)] = PendingTelegramAction(
+                session: session,
+                remoteConfig: remoteConfig,
+                messageId: nil
+            )
+        }
+
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return }
+        request.httpBody = httpBody
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            if canAccept, let data = data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let result = json["result"] as? [String: Any],
+               let messageId = result["message_id"] as? Int {
+                DispatchQueue.main.async {
+                    if var pending = self?.pendingActions[String(callbackId)] {
+                        pending.messageId = messageId
+                        self?.pendingActions[String(callbackId)] = pending
+                    }
+                }
+            }
+        }.resume()
+    }
+
+    private func pollUpdates() {
+        let config = MaxwellConfig.load()
+        guard config.telegramEnabled else { return }
+
+        let urlString = "https://api.telegram.org/bot\(MaxwellConfig.telegramToken)/getUpdates?offset=\(lastUpdateId + 1)&timeout=1"
+        guard let url = URL(string: urlString) else { return }
+
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let results = json["result"] as? [[String: Any]] else { return }
+
+            for update in results {
+                if let updateId = update["update_id"] as? Int {
+                    self?.lastUpdateId = max(self?.lastUpdateId ?? 0, updateId)
+                }
+
+                if let callbackQuery = update["callback_query"] as? [String: Any],
+                   let data = callbackQuery["data"] as? String,
+                   let callbackId = callbackQuery["id"] as? String {
+                    self?.handleCallback(data: data, callbackQueryId: callbackId)
+                }
+            }
+        }.resume()
+    }
+
+    private func handleCallback(data: String, callbackQueryId: String) {
+        let parts = data.split(separator: "_")
+        guard parts.count == 2 else { return }
+
+        let action = String(parts[0])
+        let id = String(parts[1])
+
+        guard let pending = pendingActions[id] else {
+            answerCallback(callbackQueryId: callbackQueryId, text: "Session expired")
+            return
+        }
+
+        if action == "accept" {
+            executeAccept(pending: pending) { [weak self] success in
+                DispatchQueue.main.async {
+                    self?.answerCallback(callbackQueryId: callbackQueryId, text: success ? "✅ Accepted!" : "❌ Failed")
+                    if success, let messageId = pending.messageId {
+                        self?.updateMessage(messageId: messageId, text: "✅ Accepted\n\n\(pending.session.message)")
+                    }
+                    self?.pendingActions.removeValue(forKey: id)
+                }
+            }
+        } else if action == "reject" {
+            executeReject(pending: pending) { [weak self] success in
+                DispatchQueue.main.async {
+                    self?.answerCallback(callbackQueryId: callbackQueryId, text: success ? "❌ Rejected" : "❌ Failed")
+                    if success, let messageId = pending.messageId {
+                        self?.updateMessage(messageId: messageId, text: "❌ Rejected\n\n\(pending.session.message)")
+                    }
+                    self?.pendingActions.removeValue(forKey: id)
+                }
+            }
+        }
+    }
+
+    private func executeAccept(pending: PendingTelegramAction, completion: @escaping (Bool) -> Void) {
+        guard let remote = pending.remoteConfig,
+              let tmuxSession = pending.session.tmuxSession else {
+            completion(false)
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let keyPath = NSString(string: remote.keyPath).expandingTildeInPath
+            let sshCmd = "ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i \"\(keyPath)\" \(remote.user)@\(remote.host) \"tmux send-keys -t '\(tmuxSession)' '1' Enter\""
+
+            let task = Process()
+            task.launchPath = "/bin/bash"
+            task.arguments = ["-c", sshCmd]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+                completion(task.terminationStatus == 0)
+            } catch {
+                completion(false)
+            }
+        }
+    }
+
+    private func executeReject(pending: PendingTelegramAction, completion: @escaping (Bool) -> Void) {
+        guard let remote = pending.remoteConfig,
+              let tmuxSession = pending.session.tmuxSession else {
+            completion(false)
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let keyPath = NSString(string: remote.keyPath).expandingTildeInPath
+            let sshCmd = "ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i \"\(keyPath)\" \(remote.user)@\(remote.host) \"tmux send-keys -t '\(tmuxSession)' '2' Enter\""
+
+            let task = Process()
+            task.launchPath = "/bin/bash"
+            task.arguments = ["-c", sshCmd]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+                completion(task.terminationStatus == 0)
+            } catch {
+                completion(false)
+            }
+        }
+    }
+
+    private func answerCallback(callbackQueryId: String, text: String) {
+        let urlString = "https://api.telegram.org/bot\(MaxwellConfig.telegramToken)/answerCallbackQuery"
+        guard let url = URL(string: urlString) else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "callback_query_id": callbackQueryId,
+            "text": text
+        ]
+
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return }
+        request.httpBody = httpBody
+
+        URLSession.shared.dataTask(with: request).resume()
+    }
+
+    private func updateMessage(messageId: Int, text: String) {
+        let urlString = "https://api.telegram.org/bot\(MaxwellConfig.telegramToken)/editMessageText"
+        guard let url = URL(string: urlString) else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "chat_id": MaxwellConfig.telegramChatId,
+            "message_id": messageId,
+            "text": text
+        ]
+
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return }
+        request.httpBody = httpBody
+
+        URLSession.shared.dataTask(with: request).resume()
+    }
+}
+
 class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
     var window: NSWindow?
     var tableView: NSTableView!
@@ -360,12 +745,17 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     var speedSlider: NSSlider!
     var speedLabel: NSTextField!
     var showDoneBubblesCheckbox: NSButton!
+    var telegramEnabledCheckbox: NSButton!
 
     private var sidebarTableView: NSTableView!
     private var contentContainerView: NSView!
     private var sshContentView: NSView!
     private var othersContentView: NSView!
-    private let menuItems = ["SSH", "Others"]
+    private var themeContentView: NSView!
+    private var themeGridDocView: FlippedView!
+    private var messageField: NSTextField!
+    private var themeTiles: [ThemeTileView] = []
+    private let menuItems = ["SSH", "Others", "Theme"]
 
     override init() {
         config = MaxwellConfig.load()
@@ -380,6 +770,9 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         tableView.reloadData()
         updateSpeedUI()
         updateDoneBubblesUI()
+        updateTelegramUI()
+        messageField?.stringValue = config.clickMessage
+        populateThemeGrid()
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -426,9 +819,11 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
 
         setupSSHContent()
         setupOthersContent()
+        setupThemeContent()
 
         sshContentView.isHidden = false
         othersContentView.isHidden = true
+        themeContentView.isHidden = true
 
         let saveButton = NSButton(frame: NSRect(x: 550 - 110, y: 10, width: 100, height: 30))
         saveButton.title = "Save"
@@ -564,6 +959,86 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         showDoneBubblesCheckbox.frame = NSRect(x: 20, y: 170, width: 200, height: 20)
         showDoneBubblesCheckbox.state = config.showDoneBubbles ? .on : .off
         othersContentView.addSubview(showDoneBubblesCheckbox)
+
+        telegramEnabledCheckbox = NSButton(checkboxWithTitle: "Telegram notifications", target: self, action: #selector(telegramEnabledChanged(_:)))
+        telegramEnabledCheckbox.frame = NSRect(x: 20, y: 145, width: 200, height: 20)
+        telegramEnabledCheckbox.state = config.telegramEnabled ? .on : .off
+        othersContentView.addSubview(telegramEnabledCheckbox)
+    }
+
+    private func setupThemeContent() {
+        themeContentView = NSView(frame: contentContainerView.bounds)
+        contentContainerView.addSubview(themeContentView)
+
+        let title = NSTextField(labelWithString: "Theme")
+        title.font = NSFont.boldSystemFont(ofSize: 14)
+        title.frame = NSRect(x: 20, y: 370, width: 200, height: 20)
+        themeContentView.addSubview(title)
+
+        let msgLabel = NSTextField(labelWithString: "Message on click:")
+        msgLabel.font = NSFont.systemFont(ofSize: 13)
+        msgLabel.frame = NSRect(x: 20, y: 338, width: 130, height: 20)
+        themeContentView.addSubview(msgLabel)
+
+        messageField = NSTextField(frame: NSRect(x: 150, y: 335, width: 240, height: 24))
+        messageField.stringValue = config.clickMessage
+        messageField.placeholderString = MaxwellConfig.defaultClickMessage
+        messageField.identifier = NSUserInterfaceItemIdentifier("clickMessage")
+        messageField.delegate = self
+        themeContentView.addSubview(messageField)
+
+        let hint = NSTextField(labelWithString: "Drop .gif files into ~/.maxwell/gifs to add more themes")
+        hint.font = NSFont.systemFont(ofSize: 10)
+        hint.textColor = .secondaryLabelColor
+        hint.frame = NSRect(x: 20, y: 312, width: 390, height: 14)
+        themeContentView.addSubview(hint)
+
+        let scrollView = NSScrollView(frame: NSRect(x: 20, y: 15, width: 390, height: 290))
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        themeGridDocView = FlippedView(frame: NSRect(x: 0, y: 0, width: 372, height: 290))
+        scrollView.documentView = themeGridDocView
+        themeContentView.addSubview(scrollView)
+
+        populateThemeGrid()
+    }
+
+    private func populateThemeGrid() {
+        guard themeGridDocView != nil else { return }
+        themeTiles.forEach { $0.removeFromSuperview() }
+        themeTiles.removeAll()
+
+        let themes = ThemeManager.availableThemes()
+        let columns = 3
+        let tileW: CGFloat = 116
+        let tileH: CGFloat = 96
+        let hGap: CGFloat = 6
+        let vGap: CGFloat = 10
+        let rows = (themes.count + columns - 1) / columns
+        let docHeight = max(290, CGFloat(rows) * (tileH + vGap) + vGap)
+        themeGridDocView.frame = NSRect(x: 0, y: 0, width: 372, height: docHeight)
+
+        for (index, url) in themes.enumerated() {
+            let col = index % columns
+            let row = index / columns
+            let x = hGap + CGFloat(col) * (tileW + hGap)
+            let y = vGap + CGFloat(row) * (tileH + vGap)
+            let tile = ThemeTileView(
+                frame: NSRect(x: x, y: y, width: tileW, height: tileH),
+                url: url,
+                isSelected: url.lastPathComponent == config.theme)
+            tile.onSelect = { [weak self] in self?.selectTheme(tile.themeFileName) }
+            themeGridDocView.addSubview(tile)
+            themeTiles.append(tile)
+        }
+    }
+
+    private func selectTheme(_ fileName: String) {
+        config.theme = fileName
+        for tile in themeTiles {
+            tile.isSelected = tile.themeFileName == fileName
+        }
     }
 
     private func formatSpeed(_ speed: Double) -> String {
@@ -589,8 +1064,16 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         showDoneBubblesCheckbox?.state = config.showDoneBubbles ? .on : .off
     }
 
+    private func updateTelegramUI() {
+        telegramEnabledCheckbox?.state = config.telegramEnabled ? .on : .off
+    }
+
     @objc private func doneBubblesChanged(_ sender: NSButton) {
         config.showDoneBubbles = sender.state == .on
+    }
+
+    @objc private func telegramEnabledChanged(_ sender: NSButton) {
+        config.telegramEnabled = sender.state == .on
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
@@ -652,6 +1135,7 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         let selectedRow = tableView.selectedRow
         sshContentView.isHidden = selectedRow != 0
         othersContentView.isHidden = selectedRow != 1
+        themeContentView.isHidden = selectedRow != 2
     }
 
     @objc private func toggleEnabled(_ sender: NSButton) {
@@ -738,6 +1222,9 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     }
 
     @objc private func saveConfig() {
+        if let field = messageField {
+            config.clickMessage = field.stringValue
+        }
         config.save()
         onConfigChanged?()
         window?.close()
@@ -746,6 +1233,10 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     func controlTextDidEndEditing(_ obj: Notification) {
         guard let textField = obj.object as? NSTextField,
               let identifier = textField.identifier?.rawValue else { return }
+        if identifier == "clickMessage" {
+            config.clickMessage = textField.stringValue
+            return
+        }
         let row = textField.tag
         guard row < config.remotes.count else { return }
 
@@ -760,6 +1251,7 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
 }
 
 class HoverView: NSView {
+    var clickMessage: String = MaxwellConfig.defaultClickMessage
     var closeButton: NSButton!
     var increaseButton: NSButton!
     var decreaseButton: NSButton!
@@ -990,7 +1482,9 @@ class HoverView: NSView {
     }
 
     func showMeow() {
-        let meowLabel = NSTextField(labelWithString: "meow")
+        let text = clickMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let meowLabel = NSTextField(labelWithString: text)
         meowLabel.font = NSFont.systemFont(ofSize: 14, weight: .bold)
         meowLabel.textColor = NSColor.labelColor
         meowLabel.backgroundColor = .clear
@@ -1054,44 +1548,6 @@ class ClaudeMonitor {
     private var timer: Timer?
     private var lastState: Bool = false
     private var config: MaxwellConfig = MaxwellConfig.load()
-    private var dismissedSessions: Set<String> = []
-    private let dismissedSessionsKey = "dismissedClaudeSessions"
-
-    init() {
-        loadDismissedSessions()
-    }
-
-    private func loadDismissedSessions() {
-        if let saved = UserDefaults.standard.array(forKey: dismissedSessionsKey) as? [String] {
-            let projectsPath = NSString(string: "~/.claude/projects").expandingTildeInPath
-            let fileManager = FileManager.default
-            let now = Date()
-            let maxAge: TimeInterval = 300
-
-            let validSessions = saved.filter { sessionId in
-                guard let projectDirs = try? fileManager.contentsOfDirectory(atPath: projectsPath) else {
-                    return false
-                }
-                for projectDir in projectDirs {
-                    let filePath = "\(projectsPath)/\(projectDir)/\(sessionId).jsonl"
-                    if let attrs = try? fileManager.attributesOfItem(atPath: filePath),
-                       let mtime = attrs[.modificationDate] as? Date {
-                        let age = now.timeIntervalSince(mtime)
-                        return age <= maxAge
-                    }
-                }
-                return false
-            }
-            dismissedSessions = Set(validSessions)
-            if validSessions.count != saved.count {
-                saveDismissedSessions()
-            }
-        }
-    }
-
-    private func saveDismissedSessions() {
-        UserDefaults.standard.set(Array(dismissedSessions), forKey: dismissedSessionsKey)
-    }
 
     func start() {
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -1109,9 +1565,12 @@ class ClaudeMonitor {
     }
 
     func dismissFinishedSessions() {
-        dismissedSessions = dismissedSessions.union(lastFinishedSessions)
-        saveDismissedSessions()
+        let doneDir = "/tmp/maxwell_claude_done"
+        for session in lastFinishedSessions {
+            try? FileManager.default.removeItem(atPath: "\(doneDir)/\(session).json")
+        }
         lastFinishedMessages = []
+        lastFinishedSessions = []
         onClaudeFinishedCleared?()
     }
 
@@ -1182,42 +1641,24 @@ class ClaudeMonitor {
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let output = String(data: data, encoding: .utf8) ?? ""
 
+                let now = Int(Date().timeIntervalSince1970)
                 for line in output.components(separatedBy: .newlines) where !line.isEmpty {
-                    if let jsonData = line.data(using: .utf8),
-                       let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                       let tool = json["tool"] as? String,
-                       let cwd = json["cwd"] as? String,
-                       let time = json["time"] as? Int {
-                        let now = Int(Date().timeIntervalSince1970)
-                        if now - time > 2 && now - time < 120 {
-                            let cmd = json["cmd"] as? String ?? ""
-                            let sessionId = json["session"] as? String ?? ""
-                            let folder = cwd.components(separatedBy: "/").suffix(2).joined(separator: "/")
-                            let toolIcon: String
-                            switch tool {
-                            case "Bash": toolIcon = "🖥️"
-                            case "Edit": toolIcon = "✏️"
-                            case "Write": toolIcon = "📝"
-                            case "Read": toolIcon = "📖"
-                            default: toolIcon = "⚠️"
-                            }
-                            let shortCmd = cmd.count > 20 ? String(cmd.prefix(20)) + "…" : cmd
-                            let serverLabel = "[\(remote.name)] "
-                            let message: String
-                            if !shortCmd.isEmpty {
-                                message = "\(serverLabel)\(toolIcon) \(shortCmd)\n📁 \(folder)"
-                            } else {
-                                message = "\(serverLabel)\(toolIcon) \(tool)\n📁 \(folder)"
-                            }
-                            sessions.append(SessionInfo(
-                                message: message,
-                                cwd: cwd,
-                                sessionId: sessionId,
-                                isRemote: true,
-                                remoteName: remote.name
-                            ))
-                        }
+                    guard let jsonData = line.data(using: .utf8),
+                          let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                          let cwd = json["cwd"] as? String,
+                          let time = json["time"] as? Int else {
+                        continue
                     }
+                    if now - time >= 120 { continue }
+                    let message = buildBubbleMessage(json: json, cwd: cwd, serverLabel: "[\(remote.name)] ")
+                    sessions.append(SessionInfo(
+                        message: message,
+                        cwd: cwd,
+                        sessionId: json["session"] as? String ?? "",
+                        isRemote: true,
+                        remoteName: remote.name,
+                        tmuxSession: json["tmux"] as? String
+                    ))
                 }
             } catch {
             }
@@ -1225,411 +1666,147 @@ class ClaudeMonitor {
         return sessions
     }
 
-    private func checkAllSessions() -> [SessionInfo] {
-        var sessions: [SessionInfo] = []
+    private func buildBubbleMessage(json: [String: Any], cwd: String, serverLabel: String) -> String {
+        let folder = cwd.components(separatedBy: "/").suffix(2).joined(separator: "/")
+        let tool = json["tool"] as? String
+        let cmd = (json["cmd"] as? String) ?? ""
+        let toolIcon: String
+        switch tool {
+        case "Bash": toolIcon = "🖥️"
+        case "Edit": toolIcon = "✏️"
+        case "Write": toolIcon = "📝"
+        case "Read": toolIcon = "📖"
+        default: toolIcon = "⚠️"
+        }
+        let head: String
+        if !cmd.isEmpty {
+            let shortCmd = cmd.count > 20 ? String(cmd.prefix(20)) + "…" : cmd
+            head = "\(toolIcon) \(shortCmd)"
+        } else if let tool = tool, !tool.isEmpty {
+            head = "\(toolIcon) \(tool)"
+        } else if let msg = json["message"] as? String, !msg.isEmpty {
+            let shortMsg = msg.count > 26 ? String(msg.prefix(26)) + "…" : msg
+            head = "⚠️ \(shortMsg)"
+        } else {
+            head = "⚠️ Approve?"
+        }
+        return folder.isEmpty ? "\(serverLabel)\(head)" : "\(serverLabel)\(head)\n📁 \(folder)"
+    }
 
+    private func checkAllSessions() -> [SessionInfo] {
         let statusDir = "/tmp/maxwell_claude"
         let fileManager = FileManager.default
 
         guard let files = try? fileManager.contentsOfDirectory(atPath: statusDir) else {
-            return sessions
+            return []
         }
 
         let now = Int(Date().timeIntervalSince1970)
+        var found: [(time: Int, info: SessionInfo)] = []
 
-        fileLoop: for file in files where file.hasSuffix(".json") {
+        for file in files where file.hasSuffix(".json") {
             let filePath = "\(statusDir)/\(file)"
 
             guard let attrs = try? fileManager.attributesOfItem(atPath: filePath),
-                  let fileMtime = attrs[.modificationDate] as? Date else {
-                continue fileLoop
-            }
-
-            guard let data = fileManager.contents(atPath: filePath),
+                  let markerMtime = attrs[.modificationDate] as? Date,
+                  let data = fileManager.contents(atPath: filePath),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tool = json["tool"] as? String,
                   let cwd = json["cwd"] as? String,
                   let time = json["time"] as? Int,
                   let session = json["session"] as? String else {
-                continue fileLoop
-            }
-
-            let sessionHistoryPath = NSString(string: "~/.claude/projects").expandingTildeInPath
-            if let sessionDirs = try? fileManager.contentsOfDirectory(atPath: sessionHistoryPath) {
-                for dir in sessionDirs {
-                    let transcriptPath = "\(sessionHistoryPath)/\(dir)/\(session).jsonl"
-                    if let transcriptAttrs = try? fileManager.attributesOfItem(atPath: transcriptPath),
-                       let transcriptMtime = transcriptAttrs[.modificationDate] as? Date {
-                        if transcriptMtime.timeIntervalSince1970 > fileMtime.timeIntervalSince1970 + 2 {
-                            try? fileManager.removeItem(atPath: filePath)
-                            continue fileLoop
-                        }
-                    }
-                }
-            }
-
-            if now - time > 120 {
-                try? fileManager.removeItem(atPath: filePath)
-                continue fileLoop
-            }
-
-            if now - time > 2 {
-                let cmd = json["cmd"] as? String ?? ""
-                let folder = cwd.components(separatedBy: "/").suffix(2).joined(separator: "/")
-                let toolIcon: String
-                switch tool {
-                case "Bash": toolIcon = "🖥️"
-                case "Edit": toolIcon = "✏️"
-                case "Write": toolIcon = "📝"
-                case "Read": toolIcon = "📖"
-                default: toolIcon = "⚠️"
-                }
-                let shortCmd = cmd.count > 20 ? String(cmd.prefix(20)) + "…" : cmd
-                let message: String
-                if !shortCmd.isEmpty {
-                    message = "\(toolIcon) \(shortCmd)\n📁 \(folder)"
-                } else {
-                    message = "\(toolIcon) \(tool)\n📁 \(folder)"
-                }
-                sessions.append(SessionInfo(
-                    message: message,
-                    cwd: cwd,
-                    sessionId: session,
-                    isRemote: false,
-                    remoteName: nil
-                ))
-            }
-        }
-
-        return sessions
-    }
-
-    private func cleanupStoppedMarkers() {
-        let stoppedDir = "/tmp/maxwell_claude_stopped"
-        let fileManager = FileManager.default
-        let now = Int(Date().timeIntervalSince1970)
-
-        guard let files = try? fileManager.contentsOfDirectory(atPath: stoppedDir) else {
-            return
-        }
-
-        for file in files where file.hasSuffix(".json") {
-            let filePath = "\(stoppedDir)/\(file)"
-            if let data = fileManager.contents(atPath: filePath),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let time = json["time"] as? Int {
-                if now - time > 300 {
-                    try? fileManager.removeItem(atPath: filePath)
-                }
-            }
-        }
-    }
-
-    private func checkFinishedSessions() -> ([String], Set<String>) {
-        var messages: [String] = []
-        var sessionIds: Set<String> = []
-        let fileManager = FileManager.default
-        let projectsPath = NSString(string: "~/.claude/projects").expandingTildeInPath
-        let statusDir = "/tmp/maxwell_claude"
-        let stoppedDir = "/tmp/maxwell_claude_stopped"
-
-        cleanupStoppedMarkers()
-
-        guard let projectDirs = try? fileManager.contentsOfDirectory(atPath: projectsPath) else {
-            return (messages, sessionIds)
-        }
-
-        let now = Date()
-        let maxAge: TimeInterval = 300
-
-        for projectDir in projectDirs {
-            let projectPath = "\(projectsPath)/\(projectDir)"
-            guard let files = try? fileManager.contentsOfDirectory(atPath: projectPath) else {
                 continue
             }
 
-            for file in files where file.hasSuffix(".jsonl") {
-                let filePath = "\(projectPath)/\(file)"
-                let sessionId = String(file.dropLast(6))
-
-                if dismissedSessions.contains(sessionId) {
-                    continue
-                }
-
-                let wasStopped = fileManager.fileExists(atPath: "\(stoppedDir)/\(sessionId).json")
-                if wasStopped {
-                    continue
-                }
-
-                guard let attrs = try? fileManager.attributesOfItem(atPath: filePath),
-                      let mtime = attrs[.modificationDate] as? Date else {
-                    continue
-                }
-
-                let age = now.timeIntervalSince(mtime)
-                if age < 5 || age > maxAge {
-                    continue
-                }
-
-                let hasActiveStatus = fileManager.fileExists(atPath: "\(statusDir)/\(sessionId).json")
-                if hasActiveStatus {
-                    continue
-                }
-
-                guard let data = fileManager.contents(atPath: filePath),
-                      let content = String(data: data, encoding: .utf8) else {
-                    continue
-                }
-
-                let lines = content.components(separatedBy: .newlines).filter { !$0.isEmpty }
-
-                var lastRelevantType: String? = nil
-                var userMessageCount = 0
-                var assistantMessageCount = 0
-                var lastUserPrompt: String? = nil
-
-                for line in lines.reversed() {
-                    guard let lineData = line.data(using: .utf8),
-                          let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                          let msgType = json["type"] as? String else {
-                        continue
-                    }
-                    if msgType == "assistant" {
-                        assistantMessageCount += 1
-                        if lastRelevantType == nil {
-                            lastRelevantType = msgType
-                        }
-                    } else if msgType == "user" {
-                        userMessageCount += 1
-                        if lastRelevantType == nil {
-                            lastRelevantType = msgType
-                        }
-                        if lastUserPrompt == nil {
-                            if let message = json["message"] as? [String: Any],
-                               let content = message["content"] as? String {
-                                lastUserPrompt = content
-                            }
-                        }
-                    }
-                    if userMessageCount >= 2 && assistantMessageCount >= 2 && lastUserPrompt != nil {
-                        break
-                    }
-                }
-
-                if lastRelevantType == "assistant" && userMessageCount >= 1 && assistantMessageCount >= 1 {
-                    if !sessionIds.contains(sessionId) {
-                        let folderParts = projectDir.split(separator: "-").suffix(2)
-                        let folder = folderParts.joined(separator: "/")
-                        let prompt = lastUserPrompt ?? ""
-                        let shortPrompt = prompt.count > 30 ? String(prompt.prefix(30)) + "…" : prompt
-                        messages.append("✅ \(shortPrompt)\n📁 \(folder)")
-                        sessionIds.insert(sessionId)
-                    }
-                }
+            // Clear as soon as the session moves past the prompt (approved OR
+            // rejected): once the transcript advances beyond when the prompt
+            // appeared, the decision has been made. This covers rejects and
+            // interrupts, which fire no clearing hook. While the prompt is still
+            // open the loop is blocked and the transcript does not advance, so a
+            // genuinely-pending bubble is never cleared early.
+            if transcriptAdvanced(past: markerMtime, session: session) {
+                try? fileManager.removeItem(atPath: filePath)
+                continue
             }
+
+            // Safety net for sessions that died without firing any hook.
+            if now - time >= 120 {
+                try? fileManager.removeItem(atPath: filePath)
+                continue
+            }
+
+            let message = buildBubbleMessage(json: json, cwd: cwd, serverLabel: "")
+            found.append((time, SessionInfo(
+                message: message,
+                cwd: cwd,
+                sessionId: session,
+                isRemote: false,
+                remoteName: nil,
+                tmuxSession: json["tmux"] as? String
+            )))
         }
 
-        return (messages, sessionIds)
+        return found.sorted { $0.time < $1.time }.map { $0.info }
     }
 
-    private func checkStatusFile() -> String? {
-        let statusPath = "/tmp/maxwell_claude_status.json"
-        guard let data = FileManager.default.contents(atPath: statusPath),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tool = json["tool"] as? String,
-              let cwd = json["cwd"] as? String,
-              let time = json["time"] as? Int else {
-            return nil
+    private func transcriptAdvanced(past markerMtime: Date, session: String) -> Bool {
+        let fileManager = FileManager.default
+        let projectsPath = NSString(string: "~/.claude/projects").expandingTildeInPath
+        guard let dirs = try? fileManager.contentsOfDirectory(atPath: projectsPath) else {
+            return false
         }
+        for dir in dirs {
+            let transcriptPath = "\(projectsPath)/\(dir)/\(session).jsonl"
+            if let attrs = try? fileManager.attributesOfItem(atPath: transcriptPath),
+               let mtime = attrs[.modificationDate] as? Date {
+                return mtime.timeIntervalSince1970 > markerMtime.timeIntervalSince1970 + 2
+            }
+        }
+        return false
+    }
 
-        let cmd = json["cmd"] as? String ?? ""
-
+    private func checkFinishedSessions() -> ([String], Set<String>) {
+        let fileManager = FileManager.default
+        let doneDir = "/tmp/maxwell_claude_done"
+        let statusDir = "/tmp/maxwell_claude"
         let now = Int(Date().timeIntervalSince1970)
-        if now - time > 2 {
+        let maxAge = 300
+
+        guard let files = try? fileManager.contentsOfDirectory(atPath: doneDir) else {
+            return ([], [])
+        }
+
+        var found: [(time: Int, message: String, session: String)] = []
+
+        for file in files where file.hasSuffix(".json") {
+            let filePath = "\(doneDir)/\(file)"
+            guard let data = fileManager.contents(atPath: filePath),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let time = json["time"] as? Int,
+                  let session = json["session"] as? String else {
+                continue
+            }
+
+            if now - time >= maxAge {
+                try? fileManager.removeItem(atPath: filePath)
+                continue
+            }
+
+            // A live "waiting for approval" state takes priority over "done".
+            if fileManager.fileExists(atPath: "\(statusDir)/\(session).json") {
+                continue
+            }
+
+            let cwd = json["cwd"] as? String ?? ""
             let folder = cwd.components(separatedBy: "/").suffix(2).joined(separator: "/")
-            let toolIcon: String
-            switch tool {
-            case "Bash": toolIcon = "🖥️"
-            case "Edit": toolIcon = "✏️"
-            case "Write": toolIcon = "📝"
-            case "Read": toolIcon = "📖"
-            default: toolIcon = "⚠️"
-            }
-            let shortCmd = cmd.count > 20 ? String(cmd.prefix(20)) + "…" : cmd
-            if !shortCmd.isEmpty {
-                return "\(toolIcon) \(shortCmd)\n📁 \(folder)"
-            }
-            return "\(toolIcon) \(tool)\n📁 \(folder)"
-        }
-        return nil
-    }
-
-    private func checkTerminalApp() -> String? {
-        let task = Process()
-        task.launchPath = "/usr/bin/osascript"
-        task.arguments = [
-            "-e", "tell application \"System Events\"",
-            "-e", "if not (exists process \"Terminal\") then return \"\"",
-            "-e", "end tell",
-            "-e", "tell application \"Terminal\"",
-            "-e", "if (count of windows) is 0 then return \"\"",
-            "-e", "get contents of selected tab of front window",
-            "-e", "end tell"
-        ]
-
-        let pipe = Pipe()
-        let errorPipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = errorPipe
-
-        do {
-            try task.run()
-            task.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            let text = String(data: data, encoding: .utf8) ?? ""
-            let errorText = String(data: errorData, encoding: .utf8) ?? ""
-
-            let debugPath = "/tmp/maxwell_debug.txt"
-            let debugContent = "ERROR: \(errorText)\n\nOUTPUT (\(text.count) chars):\n\(text.suffix(2000))"
-            try? debugContent.write(toFile: debugPath, atomically: true, encoding: .utf8)
-
-            return checkTextForClaude(text)
-        } catch {
-            return nil
-        }
-    }
-
-    private func checkVSCode() -> String? {
-        let task = Process()
-        task.launchPath = "/usr/bin/osascript"
-        task.arguments = [
-            "-e", "tell application \"System Events\"",
-            "-e", "if not (exists process \"Code\") then return \"NO_VSCODE\"",
-            "-e", "tell process \"Code\"",
-            "-e", "set frontWindow to front window",
-            "-e", "set allGroups to every group of frontWindow",
-            "-e", "set output to \"\"",
-            "-e", "repeat with g in allGroups",
-            "-e", "try",
-            "-e", "set textAreas to every text area of g",
-            "-e", "repeat with t in textAreas",
-            "-e", "set output to output & (value of t)",
-            "-e", "end repeat",
-            "-e", "end try",
-            "-e", "end repeat",
-            "-e", "return output",
-            "-e", "end tell",
-            "-e", "end tell"
-        ]
-
-        let pipe = Pipe()
-        let errorPipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = errorPipe
-
-        do {
-            try task.run()
-            task.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            let text = String(data: data, encoding: .utf8) ?? ""
-            let errorText = String(data: errorData, encoding: .utf8) ?? ""
-
-            let debugPath = "/tmp/maxwell_vscode.txt"
-            let debugContent = "ERROR: \(errorText)\nOUTPUT (\(text.count) chars):\n\(text.prefix(2000))"
-            try? debugContent.write(toFile: debugPath, atomically: true, encoding: .utf8)
-
-            if !text.isEmpty && text != "NO_VSCODE" && !text.contains("NO_VSCODE") {
-                return checkTextForClaude(text)
-            }
-        } catch {
-            return nil
-        }
-        return nil
-    }
-
-    private func getProjectFolder() -> String? {
-        let historyPath = NSString(string: "~/.claude/history.jsonl").expandingTildeInPath
-        guard let data = FileManager.default.contents(atPath: historyPath),
-              let content = String(data: data, encoding: .utf8) else {
-            return nil
+            let prompt = json["prompt"] as? String ?? ""
+            let shortPrompt = prompt.count > 30 ? String(prompt.prefix(30)) + "…" : prompt
+            let head = shortPrompt.isEmpty ? "✅ done" : "✅ \(shortPrompt)"
+            let message = folder.isEmpty ? head : "\(head)\n📁 \(folder)"
+            found.append((time, message, session))
         }
 
-        let lines = content.components(separatedBy: .newlines).reversed()
-        for line in lines.prefix(10) {
-            if line.contains("\"project\"") {
-                if let data = line.data(using: .utf8),
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let project = json["project"] as? String {
-                    let parts = project.components(separatedBy: "/")
-                    return parts.suffix(2).joined(separator: "/")
-                }
-            }
-        }
-        return nil
-    }
-
-    private func checkTextForClaude(_ text: String) -> String? {
-        let hasProceed = text.contains("Do you want to proceed?") || text.contains("Do you want to make this edit")
-        let hasYes = text.contains("1. Yes")
-        let hasNo = text.contains("2. No") || text.contains("3. No")
-
-        if hasProceed && hasYes && hasNo {
-            var toolType = ""
-            var command = ""
-
-            let lines = text.components(separatedBy: .newlines)
-            for line in lines {
-                if line.contains("⏺") {
-                    if line.contains("Bash(") {
-                        toolType = "🖥️"
-                        if let start = line.range(of: "Bash("), let end = line.range(of: ")", range: start.upperBound..<line.endIndex) {
-                            command = String(line[start.upperBound..<end.lowerBound])
-                        }
-                    } else if line.contains("Edit(") {
-                        toolType = "✏️"
-                        if let start = line.range(of: "Edit("), let end = line.range(of: ")", range: start.upperBound..<line.endIndex) {
-                            command = String(line[start.upperBound..<end.lowerBound])
-                        }
-                    } else if line.contains("Write(") {
-                        toolType = "📝"
-                        if let start = line.range(of: "Write("), let end = line.range(of: ")", range: start.upperBound..<line.endIndex) {
-                            command = String(line[start.upperBound..<end.lowerBound])
-                        }
-                    } else if line.contains("Read(") {
-                        toolType = "📖"
-                        if let start = line.range(of: "Read("), let end = line.range(of: ")", range: start.upperBound..<line.endIndex) {
-                            command = String(line[start.upperBound..<end.lowerBound])
-                        }
-                    }
-                }
-            }
-
-            let folder = getProjectFolder() ?? ""
-            let shortCommand = command.count > 15 ? String(command.prefix(15)) + "…" : command
-
-            if !toolType.isEmpty && !command.isEmpty {
-                if !folder.isEmpty {
-                    return "\(toolType) \(shortCommand)\n📁 \(folder)"
-                }
-                return "\(toolType) \(shortCommand)"
-            }
-            if !folder.isEmpty {
-                return "⚠️ Approve?\n📁 \(folder)"
-            }
-            return "⚠️ Approve?"
-        }
-
-        if text.contains("requires confirmation") || text.contains("Permission rule") {
-            if text.contains("Yes") && text.contains("No") {
-                return "⚠️ Approve?"
-            }
-        }
-
-        return nil
+        found.sort { $0.time < $1.time }
+        return (found.map { $0.message }, Set(found.map { $0.session }))
     }
 }
 
@@ -1639,24 +1816,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var claudeMonitor: ClaudeMonitor!
     var settingsController: SettingsWindowController!
     var gifView: AnimatedGIFView!
+    var telegramNotifier: TelegramNotifier!
     var originalY: CGFloat = 0
     var jumpTimer: Timer?
     var hasBubbles: Bool = false
     var hasFinishedBubbles: Bool = false
+    var currentTheme: String = MaxwellConfig.defaultTheme
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        ThemeManager.seedIfNeeded()
         let config = MaxwellConfig.load()
+        currentTheme = config.theme
 
         settingsController = SettingsWindowController()
         settingsController.onConfigChanged = { [weak self] in
             self?.claudeMonitor.reloadConfig()
-            self?.applyGifSpeed()
+            self?.applyConfig()
         }
 
-        guard let gifURL = Bundle.module.url(forResource: "Maxwell", withExtension: "gif"),
+        guard let gifURL = ThemeManager.gifURL(for: config.theme),
               let gifData = try? Data(contentsOf: gifURL),
               let image = NSImage(data: gifData) else {
-            print("Failed to load Maxwell.gif")
+            print("Failed to load gif for theme \(config.theme)")
             NSApplication.shared.terminate(nil)
             return
         }
@@ -1679,6 +1860,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         containerView = HoverView(frame: NSRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height))
         containerView.aspectRatio = imageSize.width / imageSize.height
+        containerView.clickMessage = config.clickMessage
         containerView.onSettingsClick = { [weak self] in
             self?.settingsController.show()
         }
@@ -1709,12 +1891,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         restoreWindowFrame()
         window.makeKeyAndOrderFront(nil)
 
+        telegramNotifier = TelegramNotifier()
+        telegramNotifier.start()
+
         claudeMonitor = ClaudeMonitor()
         claudeMonitor.onClaudeWaiting = { [weak self] sessions in
             self?.showNotifications(sessions: sessions)
+            let remotes = MaxwellConfig.load().remotes
+            self?.telegramNotifier.sendWaitingNotification(sessions: sessions, remotes: remotes)
         }
         claudeMonitor.onClaudeNotWaiting = { [weak self] in
             self?.hideNotifications()
+            self?.telegramNotifier.clearNotifiedMessages()
         }
         claudeMonitor.onClaudeFinished = { [weak self] messages in
             self?.showFinishedNotifications(messages: messages)
@@ -1869,12 +2057,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func applyGifSpeed() {
+    private func applyConfig() {
         let config = MaxwellConfig.load()
         gifView.speed = config.gifSpeed
+        containerView.clickMessage = config.clickMessage
         if !config.showDoneBubbles {
             hideFinishedNotifications()
         }
+        if config.theme != currentTheme {
+            reloadGif(theme: config.theme)
+        }
+    }
+
+    private func reloadGif(theme: String) {
+        guard let url = ThemeManager.gifURL(for: theme),
+              let data = try? Data(contentsOf: url),
+              let image = NSImage(data: data), image.size.height > 0 else { return }
+        currentTheme = theme
+
+        let aspect = image.size.width / image.size.height
+        containerView.aspectRatio = aspect
+        gifView.loadGIF(from: url)
+
+        var frame = window.frame
+        let newHeight = frame.width / aspect
+        frame.origin.y += frame.height - newHeight
+        frame.size.height = newHeight
+        window.setFrame(frame, display: true)
+        saveWindowFrame()
     }
 
     private func saveWindowFrame() {

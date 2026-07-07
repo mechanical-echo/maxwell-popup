@@ -34,51 +34,44 @@ alias maxwell="/path/to/maxwell-popup/.build/release/maxwell-popup &"
 
 ## Claude Code Integration
 
-Maxwell monitors Claude Code CLI sessions and shows notification bubbles when Claude is waiting for permission approval. Maxwell will bounce continuously until all prompts are resolved.
+Maxwell monitors Claude Code CLI sessions and shows a notification bubble when Claude is **actually waiting for permission approval**, bouncing until every prompt is resolved. Detection is driven by Claude Code's `Notification` hook, which fires only when a permission prompt is shown to you — so anything that is auto-approved (accept-edits, auto mode, or a matching allow rule) never triggers a false alarm.
 
-### Local Setup
+### Install the hooks
 
-Create the hook scripts on your machine:
+Copy the four hook scripts to `~/.claude/` and make them executable:
 
-**~/.claude/maxwell-hook.sh**
 ```bash
-#!/bin/bash
-TOOL="$1"
-INPUT=$(cat)
-SESSION=$(echo "$INPUT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('session_id','x'))" 2>/dev/null)
-CMD=$(echo "$INPUT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('tool_input',{}).get('command','')[:30])" 2>/dev/null)
-CWD=$(echo "$INPUT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null)
-mkdir -p /tmp/maxwell_claude
-echo "{\"tool\":\"$TOOL\",\"cmd\":\"$CMD\",\"cwd\":\"$CWD\",\"time\":$(date +%s),\"session\":\"$SESSION\"}" > "/tmp/maxwell_claude/$SESSION.json"
+cp hooks/maxwell-*.sh ~/.claude/
+chmod +x ~/.claude/maxwell-*.sh
 ```
 
-**~/.claude/maxwell-hook-clear.sh**
-```bash
-#!/bin/bash
-INPUT=$(cat)
-SESSION=$(echo "$INPUT" | python3 -c "import sys,json;print(json.load(sys.stdin).get('session_id','x'))" 2>/dev/null)
-rm -f "/tmp/maxwell_claude/$SESSION.json"
-```
+| Script | Hook event | Role |
+|--------|-----------|------|
+| `maxwell-notify.sh`  | `Notification` | Writes the "waiting" marker when a permission prompt appears |
+| `maxwell-context.sh` | `PreToolUse` | Records the last tool/command so the bubble can show it (never triggers a bubble on its own) |
+| `maxwell-clear.sh`   | `PostToolUse` / `UserPromptSubmit` / `SessionEnd` | Clears the marker once the tool runs or you respond |
+| `maxwell-stop.sh`    | `Stop` | Clears the marker and records a "done" marker |
 
-Make them executable:
-```bash
-chmod +x ~/.claude/maxwell-hook.sh ~/.claude/maxwell-hook-clear.sh
-```
+The scripts require `python3` (already present on macOS) and write valid JSON via `json.dumps`, so commands containing quotes or newlines are handled correctly. Markers live in `/tmp/maxwell_claude/` (waiting), `/tmp/maxwell_claude_ctx/` (context), and `/tmp/maxwell_claude_done/` (done).
 
 ### Configure Claude
 
-Add to `~/.claude/settings.json`:
+Add to `~/.claude/settings.json` (merge into any existing `hooks` block):
 ```json
 {
   "hooks": {
-    "PreToolUse": [
-      {"matcher": "Bash", "hooks": [{"type": "command", "command": "~/.claude/maxwell-hook.sh Bash"}]},
-      {"matcher": "Edit", "hooks": [{"type": "command", "command": "~/.claude/maxwell-hook.sh Edit"}]},
-      {"matcher": "Write", "hooks": [{"type": "command", "command": "~/.claude/maxwell-hook.sh Write"}]},
-      {"matcher": "Read", "hooks": [{"type": "command", "command": "~/.claude/maxwell-hook.sh Read"}]}
+    "Notification": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/maxwell-notify.sh"}]}
     ],
-    "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/maxwell-hook-clear.sh"}]}],
-    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/maxwell-hook-clear.sh"}]}]
+    "PreToolUse": [
+      {"matcher": "Bash",  "hooks": [{"type": "command", "command": "~/.claude/maxwell-context.sh Bash"}]},
+      {"matcher": "Edit",  "hooks": [{"type": "command", "command": "~/.claude/maxwell-context.sh Edit"}]},
+      {"matcher": "Write", "hooks": [{"type": "command", "command": "~/.claude/maxwell-context.sh Write"}]}
+    ],
+    "PostToolUse":      [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/maxwell-clear.sh tool"}]}],
+    "UserPromptSubmit": [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/maxwell-clear.sh prompt"}]}],
+    "Stop":             [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/maxwell-stop.sh"}]}],
+    "SessionEnd":       [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/maxwell-clear.sh end"}]}]
   }
 }
 ```
@@ -101,10 +94,10 @@ Maxwell can monitor Claude sessions on remote servers via SSH. Maxwell SSHs into
 
 ### Setup on Remote Machine
 
-On each remote server, create the same hook scripts as the local setup above. The remote hooks write to `/tmp/maxwell_claude/` locally, and Maxwell reads them via SSH.
+On each remote server, install the same four hook scripts and `settings.json` hooks as the local setup above. They write markers to the remote's own `/tmp/maxwell_claude/`, and Maxwell reads them over SSH.
 
-1. Create the hook scripts (same as Local Setup section)
-2. Configure Claude's `~/.claude/settings.json` (same as Configure Claude section)
+1. Copy `hooks/maxwell-*.sh` to the remote's `~/.claude/` and `chmod +x` them
+2. Configure the remote's `~/.claude/settings.json` (same as Configure Claude section)
 
 ### Requirements
 
@@ -117,6 +110,28 @@ On each remote server, create the same hook scripts as the local setup above. Th
 - Reads any JSON files in `/tmp/maxwell_claude/` on the remote
 - Shows notification bubbles with `[server-name]` prefix
 - Bubbles stack if multiple servers have pending requests
+
+## Telegram Notifications
+
+Maxwell can send Telegram notifications when Claude is waiting for permission, with buttons to Accept/Reject directly from Telegram.
+
+### Enable Telegram
+
+1. Hover over Maxwell and click the settings button
+2. Go to "Others" tab
+3. Check "Telegram notifications"
+4. Click "Save"
+
+### Remote Accept/Reject via Telegram
+
+For remote tmux sessions, you can accept or reject Claude's requests directly from Telegram:
+
+1. Make sure you're running Claude inside a tmux session on the remote server
+2. Install the hook scripts on the remote (see Setup on Remote Machine) — `maxwell-notify.sh` records the tmux session automatically
+3. When Claude waits for permission, you'll receive a Telegram message with "Accept" and "Reject" buttons
+4. Pressing a button will SSH to the server and send the appropriate key to the tmux session
+
+**Note:** This only works for remote sessions running in tmux. Local sessions and non-tmux remote sessions will show notifications without buttons.
 
 ## Auto-start on Login
 
