@@ -2,13 +2,7 @@
 # Fires on Claude Code's Notification event. Writes a "waiting" marker ONLY when
 # Claude is actually blocked on a permission prompt. In auto/accept modes no
 # permission prompt is shown, so no Notification fires and no marker is written.
-# Capture the tmux session (if any) so remote Telegram accept/reject can target it.
-TMUX_SESSION=""
-if [ -n "$TMUX" ]; then
-    TMUX_SESSION=$(tmux display-message -p '#S' 2>/dev/null)
-fi
-
-TMUXS="$TMUX_SESSION" python3 -c '
+python3 -c '
 import sys, json, os, time
 
 try:
@@ -33,9 +27,6 @@ sid = d.get("session_id", "unknown")
 cwd = d.get("cwd", "")
 out = {"session": sid, "cwd": cwd, "message": msg,
        "type": ntype or "permission_prompt", "time": int(time.time())}
-tmux = os.environ.get("TMUXS", "")
-if tmux:
-    out["tmux"] = tmux
 
 # Enrich with the last tool/command this session attempted (written by
 # maxwell-context.sh on PreToolUse) so the bubble can show what is waiting.

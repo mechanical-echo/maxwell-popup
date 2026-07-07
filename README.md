@@ -111,28 +111,6 @@ On each remote server, install the same four hook scripts and `settings.json` ho
 - Shows notification bubbles with `[server-name]` prefix
 - Bubbles stack if multiple servers have pending requests
 
-## Telegram Notifications
-
-Maxwell can send Telegram notifications when Claude is waiting for permission, with buttons to Accept/Reject directly from Telegram.
-
-### Enable Telegram
-
-1. Hover over Maxwell and click the settings button
-2. Go to "Others" tab
-3. Check "Telegram notifications"
-4. Click "Save"
-
-### Remote Accept/Reject via Telegram
-
-For remote tmux sessions, you can accept or reject Claude's requests directly from Telegram:
-
-1. Make sure you're running Claude inside a tmux session on the remote server
-2. Install the hook scripts on the remote (see Setup on Remote Machine) — `maxwell-notify.sh` records the tmux session automatically
-3. When Claude waits for permission, you'll receive a Telegram message with "Accept" and "Reject" buttons
-4. Pressing a button will SSH to the server and send the appropriate key to the tmux session
-
-**Note:** This only works for remote sessions running in tmux. Local sessions and non-tmux remote sessions will show notifications without buttons.
-
 ## Auto-start on Login
 
 ```bash

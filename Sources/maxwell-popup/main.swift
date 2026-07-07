@@ -327,40 +327,35 @@ struct SessionInfo {
     var sessionId: String
     var isRemote: Bool
     var remoteName: String?
-    var tmuxSession: String?
 }
 
 struct MaxwellConfig: Codable {
     var remotes: [RemoteConfig]
     var gifSpeed: Double
     var showDoneBubbles: Bool
-    var telegramEnabled: Bool
     var theme: String
     var clickMessage: String
     var settingsStyle: String
 
     static let configPath = NSString(string: "~/.maxwell/config.json").expandingTildeInPath
-    static let telegramToken = "***REMOVED***"
-    static let telegramChatId = "***REMOVED***"
     static let defaultTheme = "Maxwell.gif"
     static let defaultClickMessage = "meow"
     static let defaultSettingsStyle = "y2k"
 
     init(remotes: [RemoteConfig] = [], gifSpeed: Double = 1.0, showDoneBubbles: Bool = false,
-         telegramEnabled: Bool = false, theme: String = MaxwellConfig.defaultTheme,
+         theme: String = MaxwellConfig.defaultTheme,
          clickMessage: String = MaxwellConfig.defaultClickMessage,
          settingsStyle: String = MaxwellConfig.defaultSettingsStyle) {
         self.remotes = remotes
         self.gifSpeed = gifSpeed
         self.showDoneBubbles = showDoneBubbles
-        self.telegramEnabled = telegramEnabled
         self.theme = theme
         self.clickMessage = clickMessage
         self.settingsStyle = settingsStyle
     }
 
     enum CodingKeys: String, CodingKey {
-        case remotes, gifSpeed, showDoneBubbles, telegramEnabled, theme, clickMessage, settingsStyle
+        case remotes, gifSpeed, showDoneBubbles, theme, clickMessage, settingsStyle
     }
 
     init(from decoder: Decoder) throws {
@@ -368,7 +363,6 @@ struct MaxwellConfig: Codable {
         remotes = (try? c.decode([RemoteConfig].self, forKey: .remotes)) ?? []
         gifSpeed = (try? c.decode(Double.self, forKey: .gifSpeed)) ?? 1.0
         showDoneBubbles = (try? c.decode(Bool.self, forKey: .showDoneBubbles)) ?? false
-        telegramEnabled = (try? c.decode(Bool.self, forKey: .telegramEnabled)) ?? false
         theme = (try? c.decode(String.self, forKey: .theme)) ?? MaxwellConfig.defaultTheme
         clickMessage = (try? c.decode(String.self, forKey: .clickMessage)) ?? MaxwellConfig.defaultClickMessage
         settingsStyle = (try? c.decode(String.self, forKey: .settingsStyle)) ?? MaxwellConfig.defaultSettingsStyle
@@ -1790,262 +1784,6 @@ class ThemeTileView: NSView {
     }
 }
 
-struct PendingTelegramAction {
-    var session: SessionInfo
-    var remoteConfig: RemoteConfig?
-    var messageId: Int?
-}
-
-class TelegramNotifier {
-    private var lastNotifiedMessages: Set<String> = []
-    private var lastNotificationTime: Date = .distantPast
-    private let minInterval: TimeInterval = 5
-    private var pendingActions: [String: PendingTelegramAction] = [:]
-    private var pollTimer: Timer?
-    private var lastUpdateId: Int = 0
-
-    func start() {
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.pollUpdates()
-        }
-    }
-
-    func stop() {
-        pollTimer?.invalidate()
-        pollTimer = nil
-    }
-
-    func sendWaitingNotification(sessions: [SessionInfo], remotes: [RemoteConfig]) {
-        let config = MaxwellConfig.load()
-        guard config.telegramEnabled else { return }
-
-        let now = Date()
-        guard now.timeIntervalSince(lastNotificationTime) >= minInterval else { return }
-
-        let currentMessages = Set(sessions.map { $0.message })
-        let newMessages = currentMessages.subtracting(lastNotifiedMessages)
-        guard !newMessages.isEmpty else { return }
-
-        lastNotifiedMessages = currentMessages
-        lastNotificationTime = now
-
-        for session in sessions where newMessages.contains(session.message) {
-            let remoteConfig = remotes.first { $0.name == session.remoteName }
-            let canAccept = session.isRemote && session.tmuxSession != nil && !session.tmuxSession!.isEmpty && remoteConfig != nil
-            send(session: session, remoteConfig: remoteConfig, canAccept: canAccept)
-        }
-    }
-
-    func clearNotifiedMessages() {
-        lastNotifiedMessages.removeAll()
-        pendingActions.removeAll()
-    }
-
-    private func send(session: SessionInfo, remoteConfig: RemoteConfig?, canAccept: Bool) {
-        let urlString = "https://api.telegram.org/bot\(MaxwellConfig.telegramToken)/sendMessage"
-        guard let url = URL(string: urlString) else { return }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let text = "⚠️ Claude waiting\n\n\(session.message)"
-        let callbackId = UUID().uuidString.prefix(8).lowercased()
-
-        var body: [String: Any] = [
-            "chat_id": MaxwellConfig.telegramChatId,
-            "text": text
-        ]
-
-        if canAccept {
-            let keyboard: [String: Any] = [
-                "inline_keyboard": [[
-                    ["text": "✅ Accept", "callback_data": "accept_\(callbackId)"],
-                    ["text": "❌ Reject", "callback_data": "reject_\(callbackId)"]
-                ]]
-            ]
-            body["reply_markup"] = keyboard
-
-            pendingActions[String(callbackId)] = PendingTelegramAction(
-                session: session,
-                remoteConfig: remoteConfig,
-                messageId: nil
-            )
-        }
-
-        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return }
-        request.httpBody = httpBody
-
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
-            if canAccept, let data = data,
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let result = json["result"] as? [String: Any],
-               let messageId = result["message_id"] as? Int {
-                DispatchQueue.main.async {
-                    if var pending = self?.pendingActions[String(callbackId)] {
-                        pending.messageId = messageId
-                        self?.pendingActions[String(callbackId)] = pending
-                    }
-                }
-            }
-        }.resume()
-    }
-
-    private func pollUpdates() {
-        let config = MaxwellConfig.load()
-        guard config.telegramEnabled else { return }
-
-        let urlString = "https://api.telegram.org/bot\(MaxwellConfig.telegramToken)/getUpdates?offset=\(lastUpdateId + 1)&timeout=1"
-        guard let url = URL(string: urlString) else { return }
-
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let data = data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let results = json["result"] as? [[String: Any]] else { return }
-
-            for update in results {
-                if let updateId = update["update_id"] as? Int {
-                    self?.lastUpdateId = max(self?.lastUpdateId ?? 0, updateId)
-                }
-
-                if let callbackQuery = update["callback_query"] as? [String: Any],
-                   let data = callbackQuery["data"] as? String,
-                   let callbackId = callbackQuery["id"] as? String {
-                    self?.handleCallback(data: data, callbackQueryId: callbackId)
-                }
-            }
-        }.resume()
-    }
-
-    private func handleCallback(data: String, callbackQueryId: String) {
-        let parts = data.split(separator: "_")
-        guard parts.count == 2 else { return }
-
-        let action = String(parts[0])
-        let id = String(parts[1])
-
-        guard let pending = pendingActions[id] else {
-            answerCallback(callbackQueryId: callbackQueryId, text: "Session expired")
-            return
-        }
-
-        if action == "accept" {
-            executeAccept(pending: pending) { [weak self] success in
-                DispatchQueue.main.async {
-                    self?.answerCallback(callbackQueryId: callbackQueryId, text: success ? "✅ Accepted!" : "❌ Failed")
-                    if success, let messageId = pending.messageId {
-                        self?.updateMessage(messageId: messageId, text: "✅ Accepted\n\n\(pending.session.message)")
-                    }
-                    self?.pendingActions.removeValue(forKey: id)
-                }
-            }
-        } else if action == "reject" {
-            executeReject(pending: pending) { [weak self] success in
-                DispatchQueue.main.async {
-                    self?.answerCallback(callbackQueryId: callbackQueryId, text: success ? "❌ Rejected" : "❌ Failed")
-                    if success, let messageId = pending.messageId {
-                        self?.updateMessage(messageId: messageId, text: "❌ Rejected\n\n\(pending.session.message)")
-                    }
-                    self?.pendingActions.removeValue(forKey: id)
-                }
-            }
-        }
-    }
-
-    private func executeAccept(pending: PendingTelegramAction, completion: @escaping (Bool) -> Void) {
-        guard let remote = pending.remoteConfig,
-              let tmuxSession = pending.session.tmuxSession else {
-            completion(false)
-            return
-        }
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let keyPath = NSString(string: remote.keyPath).expandingTildeInPath
-            let sshCmd = "ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i \"\(keyPath)\" \(remote.user)@\(remote.host) \"tmux send-keys -t '\(tmuxSession)' '1' Enter\""
-
-            let task = Process()
-            task.launchPath = "/bin/bash"
-            task.arguments = ["-c", sshCmd]
-            task.standardOutput = FileHandle.nullDevice
-            task.standardError = FileHandle.nullDevice
-
-            do {
-                try task.run()
-                task.waitUntilExit()
-                completion(task.terminationStatus == 0)
-            } catch {
-                completion(false)
-            }
-        }
-    }
-
-    private func executeReject(pending: PendingTelegramAction, completion: @escaping (Bool) -> Void) {
-        guard let remote = pending.remoteConfig,
-              let tmuxSession = pending.session.tmuxSession else {
-            completion(false)
-            return
-        }
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let keyPath = NSString(string: remote.keyPath).expandingTildeInPath
-            let sshCmd = "ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i \"\(keyPath)\" \(remote.user)@\(remote.host) \"tmux send-keys -t '\(tmuxSession)' '2' Enter\""
-
-            let task = Process()
-            task.launchPath = "/bin/bash"
-            task.arguments = ["-c", sshCmd]
-            task.standardOutput = FileHandle.nullDevice
-            task.standardError = FileHandle.nullDevice
-
-            do {
-                try task.run()
-                task.waitUntilExit()
-                completion(task.terminationStatus == 0)
-            } catch {
-                completion(false)
-            }
-        }
-    }
-
-    private func answerCallback(callbackQueryId: String, text: String) {
-        let urlString = "https://api.telegram.org/bot\(MaxwellConfig.telegramToken)/answerCallbackQuery"
-        guard let url = URL(string: urlString) else { return }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "callback_query_id": callbackQueryId,
-            "text": text
-        ]
-
-        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return }
-        request.httpBody = httpBody
-
-        URLSession.shared.dataTask(with: request).resume()
-    }
-
-    private func updateMessage(messageId: Int, text: String) {
-        let urlString = "https://api.telegram.org/bot\(MaxwellConfig.telegramToken)/editMessageText"
-        guard let url = URL(string: urlString) else { return }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "chat_id": MaxwellConfig.telegramChatId,
-            "message_id": messageId,
-            "text": text
-        ]
-
-        guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else { return }
-        request.httpBody = httpBody
-
-        URLSession.shared.dataTask(with: request).resume()
-    }
-}
-
 class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
     var window: NSWindow?
     var tableView: NSTableView!
@@ -2054,7 +1792,6 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     var speedSlider: PixelSlider!
     var speedLabel: NSTextField!
     var showDoneBubblesCheckbox: PixelCheckbox!
-    var telegramEnabledCheckbox: PixelCheckbox!
     weak var anchorWindow: NSWindow?
 
     private var speedLCD: SevenSegmentView?
@@ -2127,7 +1864,6 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         tableView.reloadData()
         updateSpeedUI()
         updateDoneBubblesUI()
-        updateTelegramUI()
         updateStyleChips()
         messageField?.stringValue = config.clickMessage
         populateThemeGrid()
@@ -2435,12 +2171,6 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         showDoneBubblesCheckbox.target = self
         showDoneBubblesCheckbox.action = #selector(doneBubblesChanged(_:))
         othersContentView.addSubview(showDoneBubblesCheckbox)
-
-        telegramEnabledCheckbox = PixelCheckbox(title: "TELEGRAM NOTIFICATIONS", frame: NSRect(x: 0, y: size.height - 240, width: 320, height: 22))
-        telegramEnabledCheckbox.isChecked = config.telegramEnabled
-        telegramEnabledCheckbox.target = self
-        telegramEnabledCheckbox.action = #selector(telegramEnabledChanged(_:))
-        othersContentView.addSubview(telegramEnabledCheckbox)
     }
 
     private func setupThemeContent() {
@@ -2569,16 +2299,8 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         showDoneBubblesCheckbox?.isChecked = config.showDoneBubbles
     }
 
-    private func updateTelegramUI() {
-        telegramEnabledCheckbox?.isChecked = config.telegramEnabled
-    }
-
     @objc private func doneBubblesChanged(_ sender: PixelCheckbox) {
         config.showDoneBubbles = sender.isChecked
-    }
-
-    @objc private func telegramEnabledChanged(_ sender: PixelCheckbox) {
-        config.telegramEnabled = sender.isChecked
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
@@ -3141,8 +2863,7 @@ class ClaudeMonitor {
                         cwd: cwd,
                         sessionId: json["session"] as? String ?? "",
                         isRemote: true,
-                        remoteName: remote.name,
-                        tmuxSession: json["tmux"] as? String
+                        remoteName: remote.name
                     ))
                 }
             } catch {
@@ -3225,8 +2946,7 @@ class ClaudeMonitor {
                 cwd: cwd,
                 sessionId: session,
                 isRemote: false,
-                remoteName: nil,
-                tmuxSession: json["tmux"] as? String
+                remoteName: nil
             )))
         }
 
@@ -3301,7 +3021,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var claudeMonitor: ClaudeMonitor!
     var settingsController: SettingsWindowController!
     var gifView: AnimatedGIFView!
-    var telegramNotifier: TelegramNotifier!
     var originalY: CGFloat = 0
     var jumpTimer: Timer?
     var hasBubbles: Bool = false
@@ -3377,18 +3096,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         settingsController.anchorWindow = window
 
-        telegramNotifier = TelegramNotifier()
-        telegramNotifier.start()
-
         claudeMonitor = ClaudeMonitor()
         claudeMonitor.onClaudeWaiting = { [weak self] sessions in
             self?.showNotifications(sessions: sessions)
-            let remotes = MaxwellConfig.load().remotes
-            self?.telegramNotifier.sendWaitingNotification(sessions: sessions, remotes: remotes)
         }
         claudeMonitor.onClaudeNotWaiting = { [weak self] in
             self?.hideNotifications()
-            self?.telegramNotifier.clearNotifiedMessages()
         }
         claudeMonitor.onClaudeFinished = { [weak self] messages in
             self?.showFinishedNotifications(messages: messages)
