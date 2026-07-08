@@ -336,26 +336,43 @@ struct MaxwellConfig: Codable {
     var theme: String
     var clickMessage: String
     var settingsStyle: String
+    var showUsagePendant: Bool
+    var pendantScale: Double
+    var pendantOffsetX: Double
+    var pendantOffsetY: Double
+    var pendantOverGif: Bool
 
     static let configPath = NSString(string: "~/.maxwell/config.json").expandingTildeInPath
     static let defaultTheme = "Maxwell.gif"
     static let defaultClickMessage = "meow"
     static let defaultSettingsStyle = "y2k"
+    static let defaultPendantScale = 0.82
 
     init(remotes: [RemoteConfig] = [], gifSpeed: Double = 1.0, showDoneBubbles: Bool = false,
          theme: String = MaxwellConfig.defaultTheme,
          clickMessage: String = MaxwellConfig.defaultClickMessage,
-         settingsStyle: String = MaxwellConfig.defaultSettingsStyle) {
+         settingsStyle: String = MaxwellConfig.defaultSettingsStyle,
+         showUsagePendant: Bool = true,
+         pendantScale: Double = MaxwellConfig.defaultPendantScale,
+         pendantOffsetX: Double = 0,
+         pendantOffsetY: Double = 0,
+         pendantOverGif: Bool = true) {
         self.remotes = remotes
         self.gifSpeed = gifSpeed
         self.showDoneBubbles = showDoneBubbles
         self.theme = theme
         self.clickMessage = clickMessage
         self.settingsStyle = settingsStyle
+        self.showUsagePendant = showUsagePendant
+        self.pendantScale = pendantScale
+        self.pendantOffsetX = pendantOffsetX
+        self.pendantOffsetY = pendantOffsetY
+        self.pendantOverGif = pendantOverGif
     }
 
     enum CodingKeys: String, CodingKey {
         case remotes, gifSpeed, showDoneBubbles, theme, clickMessage, settingsStyle
+        case showUsagePendant, pendantScale, pendantOffsetX, pendantOffsetY, pendantOverGif
     }
 
     init(from decoder: Decoder) throws {
@@ -366,6 +383,11 @@ struct MaxwellConfig: Codable {
         theme = (try? c.decode(String.self, forKey: .theme)) ?? MaxwellConfig.defaultTheme
         clickMessage = (try? c.decode(String.self, forKey: .clickMessage)) ?? MaxwellConfig.defaultClickMessage
         settingsStyle = (try? c.decode(String.self, forKey: .settingsStyle)) ?? MaxwellConfig.defaultSettingsStyle
+        showUsagePendant = (try? c.decode(Bool.self, forKey: .showUsagePendant)) ?? true
+        pendantScale = (try? c.decode(Double.self, forKey: .pendantScale)) ?? MaxwellConfig.defaultPendantScale
+        pendantOffsetX = (try? c.decode(Double.self, forKey: .pendantOffsetX)) ?? 0
+        pendantOffsetY = (try? c.decode(Double.self, forKey: .pendantOffsetY)) ?? 0
+        pendantOverGif = (try? c.decode(Bool.self, forKey: .pendantOverGif)) ?? true
     }
 
     static func load() -> MaxwellConfig {
@@ -898,7 +920,7 @@ class LCDStripView: NSView {
 }
 
 class PixelPanelView: NSView {
-    static let bodyRect = NSRect(x: 10, y: 12, width: 600, height: 444)
+    static let bodyRect = NSRect(x: 10, y: 12, width: 600, height: 500)
     static var headerHeight: CGFloat { PixelStyle.isChrome ? 66 : 46 }
 
     override func mouseDown(with event: NSEvent) {
@@ -1789,9 +1811,17 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     var tableView: NSTableView!
     var config: MaxwellConfig
     var onConfigChanged: (() -> Void)?
+    var onPendantChanged: (() -> Void)?
     var speedSlider: PixelSlider!
     var speedLabel: NSTextField!
     var showDoneBubblesCheckbox: PixelCheckbox!
+    var showPendantCheckbox: PixelCheckbox!
+    var pendantOverCheckbox: PixelCheckbox!
+    var pendantSizeSlider: PixelSlider!
+    var pendantOffsetXSlider: PixelSlider!
+    var pendantOffsetYSlider: PixelSlider!
+    var pendantOffsetXField: NSTextField!
+    var pendantOffsetYField: NSTextField!
     weak var anchorWindow: NSWindow?
 
     private var speedLCD: SevenSegmentView?
@@ -1805,11 +1835,12 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     private var sshContentView: NSView!
     private var othersContentView: NSView!
     private var themeContentView: NSView!
+    private var pendantContentView: NSView!
     private var themeGridDocView: FlippedView!
     private var messageField: NSTextField!
     private var themeTiles: [ThemeTileView] = []
     private var displayedStyle = MaxwellConfig.defaultSettingsStyle
-    private let tabs: [(icon: String, title: String)] = [("✦", "SSH"), ("★", "EXTRAS"), ("✿", "THEME")]
+    private let tabs: [(icon: String, title: String)] = [("✦", "SSH"), ("★", "EXTRAS"), ("✿", "THEME"), ("♥", "PENDANT")]
 
     override init() {
         config = MaxwellConfig.load()
@@ -1864,6 +1895,7 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         tableView.reloadData()
         updateSpeedUI()
         updateDoneBubblesUI()
+        updatePendantUI()
         updateStyleChips()
         messageField?.stringValue = config.clickMessage
         populateThemeGrid()
@@ -1924,7 +1956,7 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
             tab.isSelected = i == index
         }
         lcdStrip?.text = "▶ \(tabs[index].title)"
-        let panes = [sshContentView, othersContentView, themeContentView]
+        let panes = [sshContentView, othersContentView, themeContentView, pendantContentView]
         for (i, pane) in panes.enumerated() {
             pane?.isHidden = i != index
         }
@@ -1941,7 +1973,7 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
     }
 
     private func setupWindow() {
-        let contentSize = NSSize(width: 622, height: 524)
+        let contentSize = NSSize(width: 622, height: 580)
         let w = KeyableWindow(
             contentRect: NSRect(origin: .zero, size: contentSize),
             styleMask: [.borderless],
@@ -2011,7 +2043,7 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
 
         let tabItems: [(icon: String, title: String)] = PixelStyle.isChrome
-            ? [("⇄", "SSH"), ("♪", "EXTRAS"), ("◈", "THEME")]
+            ? [("⇄", "SSH"), ("♪", "EXTRAS"), ("◈", "THEME"), ("♥", "PENDANT")]
             : tabs
         for (index, item) in tabItems.enumerated() {
             let y = body.maxY - headerHeight - 46 - CGFloat(index) * 38
@@ -2029,6 +2061,7 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         setupSSHContent()
         setupOthersContent()
         setupThemeContent()
+        setupPendantContent()
 
         let saveMargin: CGFloat = PixelStyle.isChrome ? 34 : 16
         saveButton = PixelButton(title: "SAVE ♥", frame: NSRect(x: body.maxX - saveMargin - 122, y: body.minY + 14, width: 122, height: 36))
@@ -2177,6 +2210,103 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
         othersContentView.addSubview(showDoneBubblesCheckbox)
     }
 
+    private func setupPendantContent() {
+        pendantContentView = NSView(frame: contentContainerView.bounds)
+        contentContainerView.addSubview(pendantContentView)
+        let size = pendantContentView.bounds.size
+
+        let caption = PixelStyle.caption("★ USAGE PENDANT")
+        caption.setFrameOrigin(NSPoint(x: 0, y: size.height - caption.frame.height - 2))
+        pendantContentView.addSubview(caption)
+
+        showPendantCheckbox = PixelCheckbox(title: "SHOW PENDANT", frame: NSRect(x: 0, y: size.height - 56, width: 158, height: 22))
+        showPendantCheckbox.isChecked = config.showUsagePendant
+        showPendantCheckbox.target = self
+        showPendantCheckbox.action = #selector(pendantToggleChanged(_:))
+        pendantContentView.addSubview(showPendantCheckbox)
+
+        pendantOverCheckbox = PixelCheckbox(title: "OVER MAXWELL", frame: NSRect(x: 176, y: size.height - 56, width: 160, height: 22))
+        pendantOverCheckbox.isChecked = config.pendantOverGif
+        pendantOverCheckbox.target = self
+        pendantOverCheckbox.action = #selector(pendantOverChanged(_:))
+        pendantContentView.addSubview(pendantOverCheckbox)
+
+        let sizeTitle = PixelStyle.label("SIZE", size: 11, color: PixelStyle.ink)
+        sizeTitle.sizeToFit()
+        sizeTitle.setFrameOrigin(NSPoint(x: 0, y: size.height - 90))
+        pendantContentView.addSubview(sizeTitle)
+
+        pendantSizeSlider = PixelSlider(frame: NSRect(x: 84, y: size.height - 96, width: 180, height: 26))
+        pendantSizeSlider.minValue = 0.5
+        pendantSizeSlider.maxValue = 1.3
+        pendantSizeSlider.doubleValue = config.pendantScale
+        pendantSizeSlider.target = self
+        pendantSizeSlider.action = #selector(pendantSizeChanged(_:))
+        pendantContentView.addSubview(pendantSizeSlider)
+
+        let smallLabel = PixelStyle.label("SMALL", size: 9, color: PixelStyle.raspberry.withAlphaComponent(0.75))
+        smallLabel.sizeToFit()
+        smallLabel.setFrameOrigin(NSPoint(x: 84, y: size.height - 114))
+        pendantContentView.addSubview(smallLabel)
+
+        let bigLabel = PixelStyle.label("BIG", size: 9, color: PixelStyle.raspberry.withAlphaComponent(0.75))
+        bigLabel.sizeToFit()
+        bigLabel.setFrameOrigin(NSPoint(x: 240, y: size.height - 114))
+        pendantContentView.addSubview(bigLabel)
+
+        let hLabel = PixelStyle.label("H OFFSET", size: 11, color: PixelStyle.ink)
+        hLabel.sizeToFit()
+        hLabel.setFrameOrigin(NSPoint(x: 0, y: size.height - 150))
+        pendantContentView.addSubview(hLabel)
+
+        pendantOffsetXSlider = PixelSlider(frame: NSRect(x: 84, y: size.height - 156, width: 150, height: 26))
+        pendantOffsetXSlider.minValue = -300
+        pendantOffsetXSlider.maxValue = 300
+        pendantOffsetXSlider.doubleValue = config.pendantOffsetX
+        pendantOffsetXSlider.target = self
+        pendantOffsetXSlider.action = #selector(pendantOffsetXChanged(_:))
+        pendantContentView.addSubview(pendantOffsetXSlider)
+
+        pendantOffsetXField = NSTextField(frame: NSRect(x: 244, y: size.height - 154, width: 52, height: 22))
+        PixelStyle.styleField(pendantOffsetXField, size: 10)
+        pendantOffsetXField.identifier = NSUserInterfaceItemIdentifier("pendantOffsetX")
+        pendantOffsetXField.delegate = self
+        pendantOffsetXField.stringValue = "\(Int(config.pendantOffsetX))"
+        pendantContentView.addSubview(pendantOffsetXField)
+
+        let vLabel = PixelStyle.label("V OFFSET", size: 11, color: PixelStyle.ink)
+        vLabel.sizeToFit()
+        vLabel.setFrameOrigin(NSPoint(x: 0, y: size.height - 190))
+        pendantContentView.addSubview(vLabel)
+
+        pendantOffsetYSlider = PixelSlider(frame: NSRect(x: 84, y: size.height - 196, width: 150, height: 26))
+        pendantOffsetYSlider.minValue = -300
+        pendantOffsetYSlider.maxValue = 300
+        pendantOffsetYSlider.doubleValue = config.pendantOffsetY
+        pendantOffsetYSlider.target = self
+        pendantOffsetYSlider.action = #selector(pendantOffsetYChanged(_:))
+        pendantContentView.addSubview(pendantOffsetYSlider)
+
+        pendantOffsetYField = NSTextField(frame: NSRect(x: 244, y: size.height - 194, width: 52, height: 22))
+        PixelStyle.styleField(pendantOffsetYField, size: 10)
+        pendantOffsetYField.identifier = NSUserInterfaceItemIdentifier("pendantOffsetY")
+        pendantOffsetYField.delegate = self
+        pendantOffsetYField.stringValue = "\(Int(config.pendantOffsetY))"
+        pendantContentView.addSubview(pendantOffsetYField)
+
+        let hint1 = PixelStyle.label("Live meter that hangs off Maxwell. Drag Maxwell", size: 9,
+                                     color: PixelStyle.raspberry.withAlphaComponent(0.75), weight: .medium)
+        hint1.sizeToFit()
+        hint1.setFrameOrigin(NSPoint(x: 0, y: size.height - 226))
+        pendantContentView.addSubview(hint1)
+
+        let hint2 = PixelStyle.label("or nudge with the offsets. Active account is live.", size: 9,
+                                     color: PixelStyle.raspberry.withAlphaComponent(0.75), weight: .medium)
+        hint2.sizeToFit()
+        hint2.setFrameOrigin(NSPoint(x: 0, y: size.height - 242))
+        pendantContentView.addSubview(hint2)
+    }
+
     private func setupThemeContent() {
         themeContentView = NSView(frame: contentContainerView.bounds)
         contentContainerView.addSubview(themeContentView)
@@ -2313,6 +2443,54 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
 
     @objc private func doneBubblesChanged(_ sender: PixelCheckbox) {
         config.showDoneBubbles = sender.isChecked
+    }
+
+    private func updatePendantUI() {
+        showPendantCheckbox?.isChecked = config.showUsagePendant
+        pendantOverCheckbox?.isChecked = config.pendantOverGif
+        pendantSizeSlider?.doubleValue = config.pendantScale
+        pendantOffsetXSlider?.doubleValue = config.pendantOffsetX
+        pendantOffsetYSlider?.doubleValue = config.pendantOffsetY
+        pendantOffsetXField?.stringValue = "\(Int(config.pendantOffsetX))"
+        pendantOffsetYField?.stringValue = "\(Int(config.pendantOffsetY))"
+    }
+
+    private func notifyPendant() {
+        persist {
+            $0.showUsagePendant = self.config.showUsagePendant
+            $0.pendantScale = self.config.pendantScale
+            $0.pendantOffsetX = self.config.pendantOffsetX
+            $0.pendantOffsetY = self.config.pendantOffsetY
+            $0.pendantOverGif = self.config.pendantOverGif
+        }
+        onPendantChanged?()
+    }
+
+    @objc private func pendantToggleChanged(_ sender: PixelCheckbox) {
+        config.showUsagePendant = sender.isChecked
+        notifyPendant()
+    }
+
+    @objc private func pendantOverChanged(_ sender: PixelCheckbox) {
+        config.pendantOverGif = sender.isChecked
+        notifyPendant()
+    }
+
+    @objc private func pendantSizeChanged(_ sender: NSSlider) {
+        config.pendantScale = sender.doubleValue
+        notifyPendant()
+    }
+
+    @objc private func pendantOffsetXChanged(_ sender: NSSlider) {
+        config.pendantOffsetX = sender.doubleValue.rounded()
+        pendantOffsetXField?.stringValue = "\(Int(config.pendantOffsetX))"
+        notifyPendant()
+    }
+
+    @objc private func pendantOffsetYChanged(_ sender: NSSlider) {
+        config.pendantOffsetY = sender.doubleValue.rounded()
+        pendantOffsetYField?.stringValue = "\(Int(config.pendantOffsetY))"
+        notifyPendant()
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
@@ -2454,6 +2632,22 @@ class SettingsWindowController: NSObject, NSTableViewDataSource, NSTableViewDele
               let identifier = textField.identifier?.rawValue else { return }
         if identifier == "clickMessage" {
             config.clickMessage = textField.stringValue
+            return
+        }
+        if identifier == "pendantOffsetX" {
+            let v = max(-300, min(300, Double(textField.stringValue) ?? 0)).rounded()
+            config.pendantOffsetX = v
+            pendantOffsetXSlider?.doubleValue = v
+            textField.stringValue = "\(Int(v))"
+            notifyPendant()
+            return
+        }
+        if identifier == "pendantOffsetY" {
+            let v = max(-300, min(300, Double(textField.stringValue) ?? 0)).rounded()
+            config.pendantOffsetY = v
+            pendantOffsetYSlider?.doubleValue = v
+            textField.stringValue = "\(Int(v))"
+            notifyPendant()
             return
         }
         let row = textField.tag
@@ -3027,6 +3221,700 @@ class ClaudeMonitor {
     }
 }
 
+func mxColor(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> NSColor {
+    return NSColor(calibratedRed: r / 255, green: g / 255, blue: b / 255, alpha: a)
+}
+
+struct AccountUsage {
+    var label: String
+    var plan: String
+    var fiveHour: Double
+    var weekly: Double
+    var fiveHourResetsAt: Date?
+    var weeklyResetsAt: Date?
+    var severity: String
+    var updatedAt: Date?
+    var isLive: Bool
+
+    init(label: String, plan: String, fiveHour: Double, weekly: Double,
+         fiveHourResetsAt: Date? = nil, weeklyResetsAt: Date? = nil,
+         severity: String, updatedAt: Date? = nil, isLive: Bool = false) {
+        self.label = label
+        self.plan = plan
+        self.fiveHour = fiveHour
+        self.weekly = weekly
+        self.fiveHourResetsAt = fiveHourResetsAt
+        self.weeklyResetsAt = weeklyResetsAt
+        self.severity = severity
+        self.updatedAt = updatedAt
+        self.isLive = isLive
+    }
+
+    static let mock: [AccountUsage] = [
+        AccountUsage(label: "W", plan: "MAX 5X", fiveHour: 92, weekly: 78, severity: "critical"),
+        AccountUsage(label: "P", plan: "PRO", fiveHour: 41, weekly: 63, severity: "normal")
+    ]
+}
+
+extension PixelStyle {
+    static func starPoints(cx: CGFloat, cy: CGFloat, outer: CGFloat, inner: CGFloat) -> [NSPoint] {
+        var pts: [NSPoint] = []
+        for k in 0..<10 {
+            let a = -CGFloat.pi / 2 + CGFloat(k) * CGFloat.pi / 5
+            let rad = k % 2 == 0 ? outer : inner
+            pts.append(NSPoint(x: cx + cos(a) * rad, y: cy + sin(a) * rad))
+        }
+        return pts
+    }
+
+    static func starPath(cx: CGFloat, cy: CGFloat, outer: CGFloat, inner: CGFloat) -> NSBezierPath {
+        let pts = starPoints(cx: cx, cy: cy, outer: outer, inner: inner)
+        let p = NSBezierPath()
+        p.move(to: pts[0])
+        for i in 1..<pts.count { p.line(to: pts[i]) }
+        p.close()
+        p.lineJoinStyle = .round
+        return p
+    }
+}
+
+class UsagePendantView: NSView {
+    var accounts: [AccountUsage] = AccountUsage.mock
+    var backdrop: NSColor?
+    var scale: CGFloat = 1.0
+    var blinkOn: Bool = true
+    var onNeedsRender: (() -> Void)?
+    private var animTimer: Timer?
+
+    private let charmSize: CGFloat = 270
+    private let designW: CGFloat = 320
+    private let designH: CGFloat = 480
+    private let chainTopInset: CGFloat = 130
+    private let cx: CGFloat = 135
+    private let cy: CGFloat = 140
+
+    private let rimGrad = NSGradient(colors: [
+        mxColor(247, 247, 252), mxColor(185, 185, 200),
+        mxColor(142, 142, 158), mxColor(232, 232, 242)])
+    private let shellGrad = NSGradient(colors: [
+        mxColor(255, 198, 222), mxColor(255, 143, 192), mxColor(224, 95, 157)])
+    private let gemPalette: [(NSColor, NSColor)] = [
+        (mxColor(255, 158, 198), mxColor(209, 90, 149)),
+        (mxColor(242, 244, 255), mxColor(169, 174, 201)),
+        (mxColor(201, 167, 255), mxColor(143, 102, 216)),
+        (mxColor(255, 214, 232), mxColor(224, 137, 180)),
+        (mxColor(168, 236, 255), mxColor(95, 184, 214))]
+
+    private let lcdBG = mxColor(40, 28, 42)
+    private let segOff = mxColor(76, 62, 76)
+    private let redSeg = mxColor(255, 59, 48)
+    private let redText = mxColor(255, 107, 96)
+    private let pinkSeg = mxColor(255, 158, 210)
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        if let backdrop = backdrop {
+            backdrop.setFill()
+            bounds.fill()
+        }
+        ctx.saveGState()
+        ctx.scaleBy(x: scale, y: scale)
+        ctx.translateBy(x: (designW - charmSize) / 2, y: chainTopInset)
+        drawChain()
+        drawStar()
+        drawGems()
+        drawButtonGems()
+        drawLCD()
+        drawLogo()
+        drawSparkles()
+        drawDangles()
+        ctx.restoreGState()
+    }
+
+    func startAnimating() {
+        animTimer?.invalidate()
+        animTimer = Timer.scheduledTimer(withTimeInterval: 0.55, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            self.blinkOn.toggle()
+            self.onNeedsRender?()
+        }
+    }
+
+    func stopAnimating() {
+        animTimer?.invalidate()
+        animTimer = nil
+    }
+
+    func renderCGImage(scaleFactor: CGFloat) -> CGImage? {
+        let pxW = Int(bounds.width * scaleFactor)
+        let pxH = Int(bounds.height * scaleFactor)
+        guard pxW > 0, pxH > 0,
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pxW, pixelsHigh: pxH,
+                  bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                  colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        rep.size = bounds.size
+        cacheDisplay(in: bounds, to: rep)
+        return rep.cgImage
+    }
+
+    private func drawChain() {
+        var y: CGFloat = -126
+        drawRing(y: y, d: 16)
+        y += 15
+        drawClasp(y: y)
+        y += 18
+        drawStrap(y: y, h: 24)
+        y += 24
+        drawThread(fromY: y, toY: 14)
+        drawPearl(centerY: y + 5, d: 11)
+        y += 13
+        drawLetterBead("M", y: y)
+        y += 15
+        drawLetterBead("A", y: y)
+        y += 15
+        drawLetterBead("X", y: y)
+        y += 16
+        drawStarBead(centerY: y + 7, d: 15)
+        y += 16
+        drawPearl(centerY: y + 4, d: 9)
+        y += 12
+        drawRing(y: y, d: 13)
+    }
+
+    private func drawRing(y: CGFloat, d: CGFloat) {
+        let ring = NSBezierPath(ovalIn: NSRect(x: cx - d / 2, y: y, width: d, height: d))
+        ring.lineWidth = 3
+        mxColor(196, 196, 210).setStroke()
+        ring.stroke()
+        let hi = NSBezierPath(ovalIn: NSRect(x: cx - d / 2 + 1.5, y: y + 1.5, width: d - 3, height: d - 3))
+        hi.lineWidth = 1
+        NSColor.white.withAlphaComponent(0.5).setStroke()
+        hi.stroke()
+    }
+
+    private func drawClasp(y: CGFloat) {
+        let rect = NSRect(x: cx - 5.5, y: y, width: 11, height: 18)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 4)
+        NSGradient(colors: [mxColor(242, 242, 248), mxColor(169, 169, 187), mxColor(214, 214, 226)])?
+            .draw(in: path, angle: 30)
+        mxColor(0, 0, 0, 0.25).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+        let nub = NSBezierPath(ovalIn: NSRect(x: rect.maxX - 4, y: y + 6, width: 4, height: 4))
+        mxColor(255, 255, 255, 0.9).setFill()
+        nub.fill()
+    }
+
+    private func drawStrap(y: CGFloat, h: CGFloat) {
+        let rect = NSRect(x: cx - 4.5, y: y, width: 9, height: h)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
+        NSGraphicsContext.saveGraphicsState()
+        path.addClip()
+        NSColor.white.setFill()
+        rect.fill()
+        mxColor(255, 158, 198).setStroke()
+        let stripes = NSBezierPath()
+        stripes.lineWidth = 3
+        var off: CGFloat = -h
+        while off < rect.width + h {
+            stripes.move(to: NSPoint(x: rect.minX + off, y: rect.maxY))
+            stripes.line(to: NSPoint(x: rect.minX + off + h, y: rect.minY))
+            off += 6
+        }
+        stripes.stroke()
+        NSGraphicsContext.restoreGraphicsState()
+        mxColor(0, 0, 0, 0.15).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+
+    private func drawThread(fromY: CGFloat, toY: CGFloat) {
+        let p = NSBezierPath()
+        p.move(to: NSPoint(x: cx, y: fromY))
+        p.line(to: NSPoint(x: cx, y: toY))
+        p.lineWidth = 2
+        mxColor(217, 168, 196).setStroke()
+        p.stroke()
+    }
+
+    private func drawPearl(centerY: CGFloat, d: CGFloat) {
+        drawGem(center: NSPoint(x: cx, y: centerY), size: d,
+                color: mxColor(243, 233, 223), shade: mxColor(216, 200, 186))
+    }
+
+    private func drawLetterBead(_ letter: String, y: CGFloat) {
+        let rect = NSRect(x: cx - 8, y: y, width: 16, height: 14)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
+        NSGradient(colors: [NSColor.white, mxColor(240, 230, 238)])?.draw(in: path, angle: -90)
+        mxColor(0, 0, 0, 0.15).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+        let font = NSFont(name: "Tahoma-Bold", size: 9) ?? NSFont.boldSystemFont(ofSize: 9)
+        drawGlowText(letter, font: font, color: mxColor(255, 95, 168), centerX: cx, y: y + 2, glow: 0)
+    }
+
+    private func drawStarBead(centerY: CGFloat, d: CGFloat) {
+        drawGem(center: NSPoint(x: cx, y: centerY), size: d,
+                color: mxColor(201, 167, 255), shade: mxColor(157, 118, 232))
+        drawGlowText("\u{2605}", font: NSFont.systemFont(ofSize: 8, weight: .bold),
+                     color: NSColor.white, centerX: cx, y: centerY - 5, glow: 2)
+    }
+
+    private func drawStar() {
+        let rim = PixelStyle.starPath(cx: cx, cy: cy, outer: 122, inner: 69)
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.55)
+        shadow.shadowOffset = NSSize(width: 0, height: -14)
+        shadow.shadowBlurRadius = 22
+        shadow.set()
+        mxColor(142, 142, 158).setFill()
+        rim.fill()
+        NSGraphicsContext.restoreGraphicsState()
+
+        rim.lineWidth = 16
+        mxColor(185, 185, 200).setStroke()
+        rim.stroke()
+        rimGrad?.draw(in: rim, angle: -90)
+
+        let shell = PixelStyle.starPath(cx: cx, cy: cy, outer: 110, inner: 61)
+        shell.lineWidth = 12
+        mxColor(255, 143, 192).setStroke()
+        shell.stroke()
+        shellGrad?.draw(in: shell, relativeCenterPosition: NSPoint(x: 0, y: -0.25))
+
+        let clip = PixelStyle.starPath(cx: cx, cy: cy, outer: 106, inner: 58)
+        NSGraphicsContext.saveGraphicsState()
+        clip.addClip()
+        let gloss = NSGradient(colors: [NSColor.white.withAlphaComponent(0.65), NSColor.white.withAlphaComponent(0)])
+        gloss?.draw(fromCenter: NSPoint(x: cx - 34, y: cy - 48), radius: 0,
+                    toCenter: NSPoint(x: cx - 34, y: cy - 48), radius: 120, options: [])
+        drawGlitter(in: clip.bounds)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func drawGlitter(in rect: NSRect) {
+        var seed: UInt64 = 8675309
+        func rnd() -> CGFloat {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return CGFloat((seed >> 33) & 0xFFFF) / 65535.0
+        }
+        for _ in 0..<70 {
+            let x = rect.minX + rnd() * rect.width
+            let y = rect.minY + rnd() * rect.height
+            let s = 0.6 + rnd() * 1.3
+            NSColor.white.withAlphaComponent(0.5 + rnd() * 0.45).setFill()
+            NSBezierPath(ovalIn: NSRect(x: x, y: y, width: s, height: s)).fill()
+        }
+    }
+
+    private func drawGems() {
+        let pts = PixelStyle.starPoints(cx: cx, cy: cy, outer: 124, inner: 70)
+        let gemSize: CGFloat = 12
+        var segs: [(a: NSPoint, b: NSPoint, len: CGFloat)] = []
+        var perim: CGFloat = 0
+        for k in 0..<10 {
+            let a = pts[k], b = pts[(k + 1) % 10]
+            let len = hypot(b.x - a.x, b.y - a.y)
+            segs.append((a, b, len))
+            perim += len
+        }
+        let n = max(1, Int((perim / gemSize).rounded()))
+        let step = perim / CGFloat(n)
+        var segIdx = 0
+        var segOffset: CGFloat = 0
+        for i in 0..<n {
+            let d = CGFloat(i) * step
+            while segIdx < segs.count - 1 && d - segOffset > segs[segIdx].len {
+                segOffset += segs[segIdx].len
+                segIdx += 1
+            }
+            let s = segs[segIdx]
+            let t = s.len > 0 ? (d - segOffset) / s.len : 0
+            let gx = s.a.x + (s.b.x - s.a.x) * t
+            let gy = s.a.y + (s.b.y - s.a.y) * t
+            let pal = gemPalette[i % gemPalette.count]
+            drawGem(center: NSPoint(x: gx, y: gy), size: gemSize, color: pal.0, shade: pal.1)
+        }
+    }
+
+    private func drawGem(center: NSPoint, size: CGFloat, color: NSColor, shade: NSColor) {
+        let rect = NSRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
+        let path = NSBezierPath(ovalIn: rect)
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.4)
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        shadow.shadowBlurRadius = 2
+        shadow.set()
+        shade.setFill()
+        path.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        NSGraphicsContext.saveGraphicsState()
+        path.addClip()
+        let g = NSGradient(colors: [NSColor.white, color, shade])
+        g?.draw(fromCenter: NSPoint(x: rect.minX + size * 0.32, y: rect.minY + size * 0.28), radius: 0,
+                toCenter: NSPoint(x: rect.midX, y: rect.midY), radius: size * 0.72, options: [])
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func drawButtonGems() {
+        let colors: [(NSColor, NSColor)] = [
+            (mxColor(201, 167, 255), mxColor(143, 102, 216)),
+            (mxColor(242, 244, 255), mxColor(185, 189, 214)),
+            (mxColor(255, 158, 198), mxColor(224, 95, 157))]
+        let total: CGFloat = 3 * 11 + 2 * 8
+        var x = cx - total / 2
+        for c in colors {
+            drawGem(center: NSPoint(x: x + 5.5, y: 52), size: 11, color: c.0, shade: c.1)
+            x += 19
+        }
+    }
+
+    private func drawLCD() {
+        let groupW: CGFloat = 58
+        let groupGap: CGFloat = 14
+        let count = max(1, min(2, accounts.count))
+        let contentW = groupW * CGFloat(count) + groupGap * CGFloat(count - 1)
+        let w = contentW + 28
+        let h: CGFloat = 94
+        let lcd = NSRect(x: cx - w / 2, y: 82, width: w, height: h)
+        let bezel = NSBezierPath(roundedRect: lcd, xRadius: 12, yRadius: 12)
+        let bezelGrad = NSGradient(colors: [mxColor(253, 253, 255), mxColor(155, 155, 172)])
+        bezelGrad?.draw(in: bezel, angle: -90)
+
+        let screen = lcd.insetBy(dx: 4, dy: 4)
+        let screenPath = NSBezierPath(roundedRect: screen, xRadius: 9, yRadius: 9)
+        lcdBG.setFill()
+        screenPath.fill()
+
+        NSGraphicsContext.saveGraphicsState()
+        screenPath.addClip()
+        NSColor.black.withAlphaComponent(0.28).setFill()
+        var lineY = screen.minY
+        while lineY < screen.maxY {
+            NSRect(x: screen.minX, y: lineY, width: screen.width, height: 1).fill()
+            lineY += 3
+        }
+        NSGraphicsContext.restoreGraphicsState()
+
+        var groupX = screen.midX - contentW / 2
+        for account in accounts.prefix(2) {
+            drawAccountGroup(account, x: groupX, screen: screen, width: groupW)
+            groupX += groupW + groupGap
+        }
+    }
+
+    private func drawAccountGroup(_ account: AccountUsage, x: CGFloat, screen: NSRect, width: CGFloat) {
+        let critical = account.severity == "critical"
+        let color = critical ? redSeg : pinkSeg
+        let textColor = critical ? redText : pinkSeg
+
+        drawGlowText(account.label, font: PixelStyle.lcdFont(9), color: color,
+                     centerX: x + width / 2, y: screen.minY + 3)
+
+        let barW: CGFloat = 14
+        let barGap: CGFloat = 8
+        let barsTotal = barW * 2 + barGap
+        let barStartX = x + (width - barsTotal) / 2
+        let barTop = screen.minY + 15
+        let barH: CGFloat = 38
+
+        let bars: [(String, Double)] = [("5h", account.fiveHour), ("wk", account.weekly)]
+        var bx = barStartX
+        for bar in bars {
+            let lit = max(0, min(7, Int((bar.1 / 100 * 7).rounded())))
+            let blink = critical && bar.1 >= 85
+            drawVUBar(x: bx, top: barTop, width: barW, height: barH, segs: 7, lit: lit, color: color, blink: blink)
+            drawGlowText(bar.0, font: PixelStyle.lcdFont(6.5), color: color.withAlphaComponent(0.85),
+                         centerX: bx + barW / 2, y: barTop + barH + 2, glow: 2)
+            drawGlowText("\(Int(bar.1))", font: PixelStyle.lcdFont(13), color: textColor,
+                         centerX: bx + barW / 2, y: barTop + barH + 11)
+            bx += barW + barGap
+        }
+    }
+
+    private func drawVUBar(x: CGFloat, top: CGFloat, width: CGFloat, height: CGFloat,
+                           segs: Int, lit: Int, color: NSColor, blink: Bool) {
+        let well = NSRect(x: x, y: top, width: width, height: height)
+        NSColor.black.withAlphaComponent(0.5).setFill()
+        NSBezierPath(roundedRect: well, xRadius: 3, yRadius: 3).fill()
+        let pad: CGFloat = 2.5
+        let gap: CGFloat = 2
+        let innerH = height - pad * 2
+        let segH = (innerH - gap * CGFloat(segs - 1)) / CGFloat(segs)
+        for i in 0..<segs {
+            let segY = well.maxY - pad - CGFloat(i + 1) * segH - CGFloat(i) * gap
+            let r = NSRect(x: x + pad, y: segY, width: width - pad * 2, height: segH)
+            let p = NSBezierPath(roundedRect: r, xRadius: 1, yRadius: 1)
+            if i < lit {
+                let dim = blink && i == lit - 1 && !blinkOn
+                if dim {
+                    color.withAlphaComponent(0.25).setFill()
+                    p.fill()
+                } else {
+                    NSGraphicsContext.saveGraphicsState()
+                    let shadow = NSShadow()
+                    shadow.shadowColor = color
+                    shadow.shadowBlurRadius = 4
+                    shadow.shadowOffset = .zero
+                    shadow.set()
+                    color.setFill()
+                    p.fill()
+                    NSGraphicsContext.restoreGraphicsState()
+                }
+            } else {
+                segOff.setFill()
+                p.fill()
+            }
+        }
+    }
+
+    private func drawGlowText(_ s: String, font: NSFont, color: NSColor,
+                              centerX: CGFloat, y: CGFloat, glow: CGFloat = 4) {
+        let shadow = NSShadow()
+        shadow.shadowColor = color.withAlphaComponent(0.9)
+        shadow.shadowBlurRadius = glow
+        shadow.shadowOffset = .zero
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .shadow: shadow]
+        let str = NSAttributedString(string: s, attributes: attrs)
+        let sz = str.size()
+        str.draw(at: NSPoint(x: centerX - sz.width / 2, y: y))
+    }
+
+    private func drawLogo() {
+        let font = NSFont(name: "SnellRoundhand-Bold", size: 17)
+            ?? NSFont(name: "Brush Script MT", size: 17)
+            ?? NSFont.systemFont(ofSize: 15, weight: .bold)
+        let shadow = NSShadow()
+        shadow.shadowColor = mxColor(199, 77, 139)
+        shadow.shadowOffset = NSSize(width: 0, height: -1.5)
+        shadow.shadowBlurRadius = 1
+        let str = NSAttributedString(string: "maxwell", attributes: [
+            .font: font, .foregroundColor: NSColor.white, .shadow: shadow])
+        let sz = str.size()
+        str.draw(at: NSPoint(x: cx - sz.width / 2 - 4, y: 182))
+        drawGlowText("\u{2665}", font: NSFont.systemFont(ofSize: 9), color: NSColor.white,
+                     centerX: cx + sz.width / 2 + 2, y: 186, glow: 3)
+    }
+
+    private func drawSparkles() {
+        let spots: [(CGFloat, CGFloat, CGFloat)] = [(18, 62, 14), (252, 128, 10), (44, 210, 12)]
+        for spot in spots {
+            drawGlowText("\u{2726}", font: NSFont(name: "Verdana-Bold", size: spot.2)
+                ?? NSFont.boldSystemFont(ofSize: spot.2),
+                color: NSColor.white, centerX: spot.0, y: spot.1, glow: 6)
+        }
+    }
+
+    private func drawDangles() {
+        let baseY: CGFloat = 250
+        drawDangle(x: cx - 40, topY: baseY, glyph: "\u{2605}", color: mxColor(255, 215, 110))
+        drawDangle(x: cx + 40, topY: baseY, glyph: "\u{2665}", color: mxColor(255, 107, 169))
+    }
+
+    private func drawDangle(x: CGFloat, topY: CGFloat, glyph: String, color: NSColor) {
+        for i in 0..<3 {
+            mxColor(196, 196, 210).setFill()
+            NSBezierPath(ovalIn: NSRect(x: x - 1.5, y: topY + CGFloat(i) * 5, width: 3, height: 3)).fill()
+        }
+        drawGlowText(glyph, font: NSFont(name: "Verdana-Bold", size: 15)
+            ?? NSFont.boldSystemFont(ofSize: 15), color: color, centerX: x, y: topY + 16, glow: 6)
+    }
+
+    static func renderMockToPNG(path: String) {
+        PixelStyle.apply(styleId: "y2k")
+        let size = NSSize(width: 320, height: 480)
+        let rect = NSRect(origin: .zero, size: size)
+        let view = UsagePendantView(frame: rect)
+        view.backdrop = mxColor(28, 20, 34)
+        let win = NSWindow(contentRect: rect, styleMask: [.borderless], backing: .buffered, defer: false)
+        win.contentView = view
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: rect) else { return }
+        view.cacheDisplay(in: rect, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return }
+        try? data.write(to: URL(fileURLWithPath: path))
+        FileHandle.standardError.write("rendered pendant to \(path)\n".data(using: .utf8)!)
+    }
+}
+
+final class UsageService {
+    var onUpdate: (([AccountUsage]) -> Void)?
+    private var timer: Timer?
+    private let cachePath = NSString(string: "~/.maxwell/usage_cache.json").expandingTildeInPath
+
+    func start() {
+        poll()
+        timer = Timer.scheduledTimer(withTimeInterval: 90, repeats: true) { [weak self] _ in
+            self?.poll()
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func poll() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self else { return }
+            guard let cred = self.readCredential(), let token = cred["accessToken"] as? String else {
+                self.publish(liveUuid: nil)
+                return
+            }
+            let profile = self.getJSON("https://api.anthropic.com/api/oauth/profile", token: token)
+            guard let usage = self.getJSON("https://api.anthropic.com/api/oauth/usage", token: token) else {
+                self.publish(liveUuid: nil)
+                return
+            }
+            let built = self.buildEntry(profile: profile, usage: usage)
+            self.upsertCache(built.0, entry: built.1)
+            self.publish(liveUuid: built.0)
+        }
+    }
+
+    private func readCredential() -> [String: Any]? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        p.arguments = ["find-generic-password", "-w", "-s", "Claude Code-credentials"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return (json["claudeAiOauth"] as? [String: Any]) ?? json
+    }
+
+    private func getJSON(_ urlString: String, token: String) -> [String: Any]? {
+        guard let url = URL(string: urlString) else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 15
+        var result: [String: Any]?
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { sem.signal() }
+            if let data = data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                result = json
+            }
+        }.resume()
+        _ = sem.wait(timeout: .now() + 20)
+        return result
+    }
+
+    private func parseDate(_ value: Any?) -> Date? {
+        guard let s = value as? String else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: s) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        if let dotRange = s.range(of: "\\.[0-9]+", options: .regularExpression) {
+            return f.date(from: s.replacingCharacters(in: dotRange, with: ""))
+        }
+        return f.date(from: s)
+    }
+
+    private func shortLabel(_ profile: [String: Any]?) -> String {
+        let account = profile?["account"] as? [String: Any]
+        let org = profile?["organization"] as? [String: Any]
+        let name = (org?["name"] as? String) ?? (account?["email"] as? String) ?? "?"
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.first.map { String($0).uppercased() } ?? "?"
+    }
+
+    private func plan(_ profile: [String: Any]?) -> String {
+        let org = profile?["organization"] as? [String: Any]
+        let tier = (org?["rate_limit_tier"] as? String) ?? ""
+        if tier.contains("max_20") { return "MAX 20X" }
+        if tier.contains("max_5") { return "MAX 5X" }
+        if tier.contains("pro") { return "PRO" }
+        if let t = org?["organization_type"] as? String, t.contains("team") { return "TEAM" }
+        return tier.uppercased()
+    }
+
+    private func buildEntry(profile: [String: Any]?, usage: [String: Any]) -> (String, [String: Any]) {
+        let five = usage["five_hour"] as? [String: Any]
+        let seven = usage["seven_day"] as? [String: Any]
+        let fiveUtil = (five?["utilization"] as? Double) ?? 0
+        let weekUtil = (seven?["utilization"] as? Double) ?? 0
+        let account = profile?["account"] as? [String: Any]
+        let uuid = (account?["uuid"] as? String) ?? (account?["email"] as? String) ?? "live"
+        let maxUtil = max(fiveUtil, weekUtil)
+        let severity = maxUtil >= 90 ? "critical" : (maxUtil >= 75 ? "warning" : "normal")
+        var entry: [String: Any] = [
+            "label": shortLabel(profile),
+            "plan": plan(profile),
+            "fiveHour": fiveUtil,
+            "weekly": weekUtil,
+            "severity": severity,
+            "updatedAt": Date().timeIntervalSince1970
+        ]
+        if let d = parseDate(five?["resets_at"]) { entry["fiveHourResetsAt"] = d.timeIntervalSince1970 }
+        if let d = parseDate(seven?["resets_at"]) { entry["weeklyResetsAt"] = d.timeIntervalSince1970 }
+        return (uuid, entry)
+    }
+
+    private func loadCache() -> [String: [String: Any]] {
+        guard let data = FileManager.default.contents(atPath: cachePath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Any]] else { return [:] }
+        return json
+    }
+
+    private func saveCache(_ cache: [String: [String: Any]]) {
+        let dir = NSString(string: "~/.maxwell").expandingTildeInPath
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: cache) {
+            try? data.write(to: URL(fileURLWithPath: cachePath))
+        }
+    }
+
+    private func upsertCache(_ uuid: String, entry: [String: Any]) {
+        var cache = loadCache()
+        var e = entry
+        e["firstSeen"] = cache[uuid]?["firstSeen"] ?? Date().timeIntervalSince1970
+        cache[uuid] = e
+        saveCache(cache)
+    }
+
+    private func publish(liveUuid: String?) {
+        let cache = loadCache()
+        let sorted = cache.sorted {
+            (($0.value["firstSeen"] as? Double) ?? 0) < (($1.value["firstSeen"] as? Double) ?? 0)
+        }
+        var accounts: [AccountUsage] = []
+        for (uuid, e) in sorted.prefix(2) {
+            accounts.append(AccountUsage(
+                label: (e["label"] as? String) ?? "?",
+                plan: (e["plan"] as? String) ?? "",
+                fiveHour: (e["fiveHour"] as? Double) ?? 0,
+                weekly: (e["weekly"] as? Double) ?? 0,
+                fiveHourResetsAt: (e["fiveHourResetsAt"] as? Double).map { Date(timeIntervalSince1970: $0) },
+                weeklyResetsAt: (e["weeklyResetsAt"] as? Double).map { Date(timeIntervalSince1970: $0) },
+                severity: (e["severity"] as? String) ?? "normal",
+                updatedAt: (e["updatedAt"] as? Double).map { Date(timeIntervalSince1970: $0) },
+                isLive: uuid == liveUuid))
+        }
+        guard !accounts.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in self?.onUpdate?(accounts) }
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var containerView: HoverView!
@@ -3038,6 +3926,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var hasBubbles: Bool = false
     var hasFinishedBubbles: Bool = false
     var currentTheme: String = MaxwellConfig.defaultTheme
+    var pendantWindow: NSWindow?
+    var pendantRenderWindow: NSWindow?
+    var pendantView: UsagePendantView?
+    var charmLayer: CALayer?
+    var usageService: UsageService?
+    var pendantScale: CGFloat = 0.82
+    var pendantOffsetX: CGFloat = 0
+    var pendantOffsetY: CGFloat = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ThemeManager.seedIfNeeded()
@@ -3048,6 +3944,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         settingsController.onConfigChanged = { [weak self] in
             self?.claudeMonitor.reloadConfig()
             self?.applyConfig()
+            self?.applyPendantConfig()
+        }
+        settingsController.onPendantChanged = { [weak self] in
+            self?.applyPendantConfig()
         }
 
         guard let gifURL = ThemeManager.gifURL(for: config.theme),
@@ -3082,6 +3982,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         containerView.onResize = { [weak self] in
             self?.saveWindowFrame()
+            self?.positionPendant()
         }
 
         gifView = AnimatedGIFView(frame: NSRect(x: 0, y: 0, width: imageSize.width, height: imageSize.height))
@@ -3091,6 +3992,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         gifView.onDrag = { [weak self] newY in
             self?.originalY = newY
             self?.containerView.updateBubblePositions()
+            self?.positionPendant()
             self?.saveWindowFrame()
         }
         gifView.onClick = { [weak self] in
@@ -3107,6 +4009,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         restoreWindowFrame()
         window.makeKeyAndOrderFront(nil)
         settingsController.anchorWindow = window
+        setupPendant()
 
         claudeMonitor = ClaudeMonitor()
         claudeMonitor.onClaudeWaiting = { [weak self] sessions in
@@ -3130,6 +4033,135 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--settings") {
             settingsController.show()
         }
+    }
+
+    func setupPendant() {
+        let config = MaxwellConfig.load()
+        pendantScale = CGFloat(config.pendantScale)
+        pendantOffsetX = CGFloat(config.pendantOffsetX)
+        pendantOffsetY = CGFloat(config.pendantOffsetY)
+        let w: CGFloat = 320 * pendantScale
+        let h: CGFloat = 480 * pendantScale
+        let rect = NSRect(x: 0, y: 0, width: w, height: h)
+
+        let view = UsagePendantView(frame: rect)
+        view.scale = pendantScale
+        view.accounts = AccountUsage.mock
+
+        let renderWin = NSWindow(contentRect: rect, styleMask: [.borderless], backing: .buffered, defer: false)
+        renderWin.contentView = view
+        pendantRenderWindow = renderWin
+
+        let host = NSView(frame: rect)
+        host.wantsLayer = true
+        let layer = CALayer()
+        host.layer?.addSublayer(layer)
+        charmLayer = layer
+
+        let win = NSWindow(contentRect: rect, styleMask: [.borderless], backing: .buffered, defer: false)
+        win.isOpaque = false
+        win.backgroundColor = .clear
+        win.hasShadow = false
+        let levelBase = NSWindow.Level.floating.rawValue
+        win.level = NSWindow.Level(rawValue: config.pendantOverGif ? levelBase + 1 : levelBase - 1)
+        win.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        win.ignoresMouseEvents = true
+        win.contentView = host
+
+        pendantWindow = win
+        pendantView = view
+        layoutCharmLayer()
+        refreshCharmImage()
+        view.onNeedsRender = { [weak self] in self?.refreshCharmImage() }
+        positionPendant()
+        view.startAnimating()
+        if config.showUsagePendant {
+            win.orderFront(nil)
+        }
+
+        let service = UsageService()
+        service.onUpdate = { [weak self] accounts in
+            self?.pendantView?.accounts = accounts
+            self?.refreshCharmImage()
+        }
+        service.start()
+        usageService = service
+    }
+
+    private func layoutCharmLayer() {
+        guard let layer = charmLayer, let view = pendantView else { return }
+        let w = view.bounds.width
+        let h = view.bounds.height
+        let ropeInset = 4 * pendantScale
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.bounds = CGRect(x: 0, y: 0, width: w, height: h)
+        layer.anchorPoint = CGPoint(x: 0.5, y: (h - ropeInset) / h)
+        layer.position = CGPoint(x: w / 2, y: h - ropeInset)
+        layer.contentsGravity = .resize
+        CATransaction.commit()
+        layer.removeAnimation(forKey: "sway")
+        let sway = CABasicAnimation(keyPath: "transform.rotation.z")
+        sway.fromValue = 3.0 * Double.pi / 180
+        sway.toValue = -3.0 * Double.pi / 180
+        sway.duration = 2.3
+        sway.autoreverses = true
+        sway.repeatCount = .infinity
+        sway.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(sway, forKey: "sway")
+    }
+
+    private func refreshCharmImage() {
+        guard let layer = charmLayer, let view = pendantView else { return }
+        let sf = pendantWindow?.backingScaleFactor ?? 2
+        guard let img = view.renderCGImage(scaleFactor: sf) else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.contentsScale = sf
+        layer.contents = img
+        CATransaction.commit()
+    }
+
+    func positionPendant() {
+        guard let win = pendantWindow else { return }
+        let m = window.frame
+        let pw = win.frame.width
+        let ph = win.frame.height
+        let ropeTopFromTop = 4 * pendantScale
+        let originX = m.midX - pw / 2 + pendantOffsetX
+        let originY = m.minY - ph + ropeTopFromTop - pendantOffsetY
+        win.setFrameOrigin(NSPoint(x: originX, y: originY))
+    }
+
+    func updatePendant(show: Bool, scale: CGFloat, offX: CGFloat, offY: CGFloat, over: Bool) {
+        guard let win = pendantWindow, let view = pendantView else { return }
+        pendantOffsetX = offX
+        pendantOffsetY = offY
+        let levelBase = NSWindow.Level.floating.rawValue
+        win.level = NSWindow.Level(rawValue: over ? levelBase + 1 : levelBase - 1)
+        if abs(scale - pendantScale) > 0.001 {
+            pendantScale = scale
+            let w: CGFloat = 320 * pendantScale
+            let h: CGFloat = 480 * pendantScale
+            win.setContentSize(NSSize(width: w, height: h))
+            pendantRenderWindow?.setContentSize(NSSize(width: w, height: h))
+            view.scale = pendantScale
+            layoutCharmLayer()
+            refreshCharmImage()
+        }
+        positionPendant()
+        if show {
+            win.orderFront(nil)
+        } else {
+            win.orderOut(nil)
+        }
+    }
+
+    func applyPendantConfig() {
+        let config = MaxwellConfig.load()
+        updatePendant(show: config.showUsagePendant, scale: CGFloat(config.pendantScale),
+                      offX: CGFloat(config.pendantOffsetX), offY: CGFloat(config.pendantOffsetY),
+                      over: config.pendantOverGif)
     }
 
     func showNotifications(sessions: [SessionInfo]) {
@@ -3336,6 +4368,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let app = NSApplication.shared
+
+if let idx = CommandLine.arguments.firstIndex(of: "--render-pendant"), idx + 1 < CommandLine.arguments.count {
+    UsagePendantView.renderMockToPNG(path: CommandLine.arguments[idx + 1])
+    exit(0)
+}
+
 let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
